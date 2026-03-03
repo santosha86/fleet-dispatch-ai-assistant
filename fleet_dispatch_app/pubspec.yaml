@@ -1,0 +1,62 @@
+name: fleet_dispatch_app
+description: Fleet Dispatch AI Assistant - Flutter Mobile App
+version: 1.0.0+1
+publish_to: none
+
+environment:
+  sdk: ^3.10.8
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # State Management
+  flutter_riverpod: ^2.6.1
+
+  # Networking
+  dio: ^5.7.0
+
+  # Navigation
+  go_router: ^14.6.2
+
+  # UI Components
+  flutter_markdown: ^0.7.4
+  fl_chart: ^0.70.2
+  shimmer: ^3.0.0
+  cupertino_icons: ^1.0.8
+
+  # Storage
+  shared_preferences: ^2.3.4
+  path_provider: ^2.1.5
+  flutter_secure_storage: ^9.2.4
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+
+  # Authentication
+  local_auth: ^2.3.0
+  crypto: ^3.0.6
+
+  # Voice Input
+  speech_to_text: ^7.0.0
+
+  # Utilities
+  uuid: ^4.5.1
+  intl: ^0.20.2
+  connectivity_plus: ^6.1.1
+  share_plus: ^10.1.4
+  url_launcher: ^6.3.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  mockito: ^5.4.4
+
+flutter:
+  uses-material-design: true
+  generate: true
+
+  assets:
+    - assets/images/

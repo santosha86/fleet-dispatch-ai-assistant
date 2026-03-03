@@ -1,0 +1,70 @@
+# Node
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Flutter
+fleet_dispatch_app/.dart_tool/
+fleet_dispatch_app/.flutter-plugins
+fleet_dispatch_app/.flutter-plugins-dependencies
+fleet_dispatch_app/build/
+fleet_dispatch_app/.packages
+fleet_dispatch_app/.pub-cache/
+fleet_dispatch_app/.pub/
+fleet_dispatch_app/android/.gradle/
+fleet_dispatch_app/android/local.properties
+fleet_dispatch_app/ios/Pods/
+fleet_dispatch_app/ios/.symlinks/
+fleet_dispatch_app/.metadata
+
+# SQLite (keep schema, exclude large data files)
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
+
+# OS
+Desktop.ini
+$RECYCLE.BIN/
+
+# APK (built artifact, served from backend/static/)
+backend/static/app-release.apk
+
+# Claude Code
+.claude/
+
+# Large data files
+*.xlsx

@@ -479,6 +479,37 @@ async def process_query_stream(user_query: UserQuery):
     # Use provided route or classify (avoid double classification from frontend)
     route = user_query.route or await asyncio.to_thread(get_route_for_query, query_text, session_id)
 
+    if route in ("greeting", "out_of_scope"):
+        # Instant response — no LLM needed, run through workflow
+        result = await asyncio.to_thread(run_workflow, query_text, session_id, route)
+
+        async def instant_response():
+            data = {
+                "content": result["content"] or "No response generated",
+                "done": True,
+                "response_time": result["response_time"] or "0s",
+                "sources": result["sources"] or ["System"],
+                "table_data": None,
+                "sql_query": None,
+                "needs_disambiguation": False,
+                "disambiguation_options": None,
+                "needs_clarification": False,
+                "clarification_message": None,
+                "clarification_options": None,
+                "visualization": None
+            }
+            yield f"data: {json.dumps(data)}\n\n"
+
+        return StreamingResponse(
+            instant_response(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
+        )
+
     if route == "pdf":
         # Stream PDF agent response
         return StreamingResponse(

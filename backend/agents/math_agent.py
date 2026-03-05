@@ -10,9 +10,9 @@ import ast
 import re
 from typing import Optional, List, Any
 from dataclasses import dataclass
-from langchain_ollama import ChatOllama
 from langchain_core.messages import SystemMessage, HumanMessage
 
+from ..utils import invoke_with_timeout, log_timing
 from ..memory import SharedMemory
 
 
@@ -88,14 +88,6 @@ def is_valid_math_expression(query: str) -> bool:
         return True
     except SyntaxError:
         return False
-
-
-# LLM for parsing natural language to math expressions
-math_model = ChatOllama(
-    model="gpt-oss:latest",
-    temperature=0,
-    format="json"
-)
 
 
 MATH_PARSER_PROMPT = """You are a math expression parser. Convert the user's natural language into a Python math expression.
@@ -224,11 +216,13 @@ def run_math_agent(query: str, session_id: str = "default") -> MathAgentResponse
             # Convert ^ to ** for Python power operator and add implicit multiplication
             expression = add_implicit_multiplication(query_text.replace('^', '**'))
         else:
-            # Use LLM to parse natural language to math expression
+            # Use LLM to parse natural language to math expression (with 30s timeout)
             system_msg = SystemMessage(content=MATH_PARSER_PROMPT)
             human_msg = HumanMessage(content=query_text)
 
-            response = math_model.invoke([system_msg, human_msg])
+            t0 = time.time()
+            response = invoke_with_timeout([system_msg, human_msg], timeout=180)
+            log_timing("math_llm", time.time() - t0, "LLM math parsing")
             data = json.loads(response.content)
 
             expression = data.get("expression")
@@ -295,6 +289,22 @@ def run_math_agent(query: str, session_id: str = "default") -> MathAgentResponse
             )
             memory.add_ai(result_response.content)
             return result_response
+
+    except TimeoutError:
+        elapsed_time = round(time.time() - start_time, 2)
+        log_timing("math_llm", elapsed_time, "TIMEOUT")
+        result_response = MathAgentResponse(
+            content=(
+                "**Request timed out** — couldn't parse the math expression in time.\n\n"
+                "Try using a direct expression like:\n"
+                "- `10 * 500 * 0.15` (for percentages)\n"
+                "- `(100 + 200) / 3`"
+            ),
+            response_time=f"{elapsed_time}s",
+            sources=["Math Calculator"]
+        )
+        memory.add_ai(result_response.content)
+        return result_response
 
     except json.JSONDecodeError as e:
         elapsed_time = round(time.time() - start_time, 2)

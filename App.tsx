@@ -114,7 +114,7 @@ const App: React.FC = () => {
 
           {/* Left Icon */}
           <div className="hidden md:flex w-[140px] h-[80px] bg-white rounded-lg p-[3px] shrink-0 items-center justify-center shadow-lg">
-             <img src="public/left-icon.png" alt="FleetCo Logo" className="w-full h-full object-contain" />
+             <img src="public/left-icon.png" alt="PB Logo" className="w-full h-full object-contain" />
           </div>
 
           {/* Title Section */}
@@ -123,7 +123,7 @@ const App: React.FC = () => {
               <span className="text-2xl">🚚</span>
               <div className="flex flex-col items-center">
                 <h1 className="text-2xl md:text-3xl font-bold text-yellow-400 drop-shadow-md tracking-tight">
-                  FleetCo - Conversational Chatbot
+                  PB - Conversational Chatbot
                 </h1>
                 <p className="text-indigo-100 text-sm font-medium mt-1 opacity-90">
                   Dispatch & Operations Assistant

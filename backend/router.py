@@ -15,7 +15,39 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 from .memory import SharedMemory
 from .column_disambiguator import SQL_AMBIGUOUS_TERMS, CSV_AMBIGUOUS_TERMS
+from .agents.math_agent import is_valid_math_expression
 
+
+# Greeting patterns - instant friendly response
+GREETING_PATTERNS = re.compile(
+    r'^(?:hi|hello|hey|howdy|greetings|good\s+(?:morning|afternoon|evening)|'
+    r'مرحبا|مرحبًا|السلام عليكم|السلام|اهلا|أهلا|هلا|صباح الخير|مساء الخير|'
+    r'سلام|هاي|مرحب)[\s!?.]*$',
+    re.IGNORECASE
+)
+
+# Out-of-scope patterns - general knowledge, jokes, opinions
+OUT_OF_SCOPE_PATTERNS = [
+    # General knowledge
+    "capital of", "president of", "king of", "population of",
+    "where is", "who is", "who was", "who are",
+    "what is the weather", "weather in", "temperature in",
+    "what year", "when was", "how old is",
+    "what country", "which country", "which city",
+    # Opinions / jokes / chat
+    "tell me a joke", "tell a joke", "joke", "funny",
+    "your opinion", "what do you think", "do you like",
+    "how are you", "what are you", "who are you", "your name",
+    "can you sing", "write a poem", "write a story",
+    "meaning of life", "what is love",
+    # Arabic general knowledge
+    "عاصمة", "رئيس", "ملك", "عدد سكان",
+    "أين", "من هو", "من هي",
+    "طقس", "درجة حرارة",
+    "نكتة", "مزحة",
+    "رأيك", "ماذا تعتقد",
+    "كيف حالك", "من أنت", "ما اسمك",
+]
 
 # CSV routing keywords - explicit column names and keywords that should route to CSV agent
 CSV_ROUTE_KEYWORDS = [
@@ -152,7 +184,20 @@ def detect_route_from_column_terms(query: str, session_id: str = None) -> str:
     """
     query_lower = query.lower()
 
-    # CHECK MATH KEYWORDS FIRST (use word-boundary matching to avoid
+    # CHECK GREETINGS FIRST (instant response)
+    if GREETING_PATTERNS.match(query.strip()):
+        return "greeting"
+
+    # CHECK OUT-OF-SCOPE (general knowledge, jokes, opinions)
+    for pattern in OUT_OF_SCOPE_PATTERNS:
+        if pattern in query_lower:
+            return "out_of_scope"
+
+    # CHECK PURE ARITHMETIC EXPRESSIONS FIRST (e.g., "2+45*4(4+23+23)-34")
+    if is_valid_math_expression(query.strip()):
+        return "math"
+
+    # CHECK MATH KEYWORDS (use word-boundary matching to avoid
     # false positives like "sum" in "summary", "sin" in "single", etc.)
     for keyword in MATH_ROUTE_KEYWORDS:
         if _word_match(keyword, query_lower):
@@ -303,6 +348,8 @@ def get_route_description(route: str) -> str:
         "sql": "Dispatch & Waybill Database",
         "csv": "Vehicle Dwell Time Data",
         "pdf": "Industry Reference Document Documents",
-        "math": "Math Calculator"
+        "math": "Math Calculator",
+        "greeting": "Greeting",
+        "out_of_scope": "Out of Scope"
     }
     return descriptions.get(route, "Unknown")

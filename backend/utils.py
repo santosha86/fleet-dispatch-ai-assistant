@@ -5,7 +5,7 @@ import pandas as pd
 import os
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from langchain_ollama import ChatOllama
-from langchain.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 # Get the directory where this file is located
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -253,14 +253,14 @@ Now wait for the user question.
 _timeout_executor = ThreadPoolExecutor(max_workers=4)
 
 
-def invoke_with_timeout(messages: list, timeout: int = 120):
+def invoke_with_timeout(messages: list, timeout: int = 180):
     """
     Invoke the LLM model with a timeout.
     Prevents hung queries (e.g., 70,000s) by killing after `timeout` seconds.
 
     Args:
         messages: List of langchain messages to send to the model
-        timeout: Maximum seconds to wait (default: 120)
+        timeout: Maximum seconds to wait (default: 180)
 
     Returns:
         LLM response object

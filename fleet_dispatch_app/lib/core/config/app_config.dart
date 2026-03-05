@@ -8,7 +8,7 @@ class AppConfig {
   static const String apiBaseUrlLocal = 'http://<server-ip>:8000'; // Real device on same WiFi
   static const String apiBaseUrlServer = 'http://<server-ip>:8000'; // Company server direct
   static const String apiBaseUrlStaging = 'https://staging-api.example.com';
-  static const String apiBaseUrlProd = 'https://api.example.com/chatbot-api';
+  static const String apiBaseUrlProd = 'https://api.example.com';
 
   static String get apiBaseUrl {
     const env = String.fromEnvironment('ENV', defaultValue: 'dev');

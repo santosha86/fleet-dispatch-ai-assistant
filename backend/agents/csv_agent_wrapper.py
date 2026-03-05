@@ -6,19 +6,62 @@ Similar pattern to SQL agent: LLM generates code, execute it, return table_data.
 import time
 import json
 import re
+import hashlib
+import threading
 import pandas as pd
 from typing import Optional, List, Any, Dict
 from dataclasses import dataclass
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from ..csv_agent import tabular_data
-from ..utils import model
+from ..utils import model, invoke_with_timeout, log_timing
 from ..memory import SharedMemory
 from ..column_disambiguator import (
     detect_csv_disambiguation,
     combine_query_with_disambiguation
 )
 from ..visualization_detector import detect_visualization, VisualizationConfig
+from ..fixed_csv_queries import match_fixed_csv_query
+
+
+# --- CSV Query Text Cache (skips LLM for repeated questions) ---
+
+_CSV_CACHE_TTL = 300  # 5 minutes
+_csv_query_cache: Dict[str, dict] = {}
+_csv_cache_lock = threading.Lock()
+
+
+def _csv_cache_key(query: str) -> str:
+    return hashlib.md5(query.strip().lower().encode()).hexdigest()
+
+
+def _get_cached_csv_response(query: str) -> Optional[dict]:
+    key = _csv_cache_key(query)
+    with _csv_cache_lock:
+        entry = _csv_query_cache.get(key)
+        if entry and (time.time() - entry["timestamp"]) < _CSV_CACHE_TTL:
+            return entry["response"]
+        elif entry:
+            del _csv_query_cache[key]
+    return None
+
+
+def _set_cached_csv_response(query: str, response: 'CSVAgentResponse'):
+    if response.needs_disambiguation:
+        return
+    key = _csv_cache_key(query)
+    cache_dict = {
+        "content": response.content,
+        "sources": response.sources,
+        "sql_query": response.sql_query,
+        "table_data": response.table_data.to_dict() if response.table_data else None,
+        "visualization": response.visualization.to_dict() if response.visualization else None
+    }
+    with _csv_cache_lock:
+        _csv_query_cache[key] = {"response": cache_dict, "timestamp": time.time()}
+        if len(_csv_query_cache) > 100:
+            oldest_key = min(_csv_query_cache, key=lambda k: _csv_query_cache[k]["timestamp"])
+            del _csv_query_cache[oldest_key]
 
 
 # Key columns to extract for follow-up context
@@ -210,6 +253,20 @@ def run_csv_agent(query: str, session_id: str = "default") -> CSVAgentResponse:
     """
     start_time = time.time()
 
+    # CHECK 0: Query text cache (fastest path)
+    cached = _get_cached_csv_response(query)
+    if cached:
+        elapsed_time = round(time.time() - start_time, 4)
+        log_timing("csv_cache", elapsed_time, f"CACHE HIT: {query[:60]}")
+        return CSVAgentResponse(
+            content=cached["content"],
+            response_time=f"{elapsed_time}s",
+            sources=cached["sources"],
+            table_data=TableData(**cached["table_data"]) if cached.get("table_data") else None,
+            sql_query=cached.get("sql_query"),
+            visualization=VisualizationConfig(**cached["visualization"]) if cached.get("visualization") else None
+        )
+
     # Get conversation memory for follow-up questions
     memory = SharedMemory.get_session(session_id)
     history = memory.get()  # Get history BEFORE adding current message
@@ -267,6 +324,16 @@ def run_csv_agent(query: str, session_id: str = "default") -> CSVAgentResponse:
         # Normal flow: add message to history
         memory.add_user(query)
 
+    # CHECK: Fixed CSV patterns (instant, no LLM needed)
+    fixed_result = match_fixed_csv_query(query, tabular_data)
+    if fixed_result is not None:
+        result_data, summary, pandas_code = fixed_result
+        elapsed_time = round(time.time() - start_time, 4)
+        log_timing("csv_fixed", elapsed_time, f"matched: {query[:60]}")
+        response = _build_csv_response(result_data, summary, pandas_code, elapsed_time, query, memory)
+        _set_cached_csv_response(query, response)
+        return response
+
     try:
         # Build context for LLM
         columns = list(tabular_data.columns)
@@ -295,11 +362,13 @@ IMPORTANT: Use the conversation history AND the previous result context to under
         else:
             user_prompt = query
 
-        # Get pandas code from LLM
-        response = model.invoke([
+        # Get pandas code from LLM (with timeout protection)
+        t0 = time.time()
+        response = invoke_with_timeout([
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_prompt)
-        ])
+        ], timeout=180)
+        log_timing("csv_llm", time.time() - t0, "LLM pandas code generation")
 
         # Parse response
         print(response.content)
@@ -393,7 +462,7 @@ IMPORTANT: Use the conversation history AND the previous result context to under
         # Store response in memory for follow-up questions
         memory.add_ai(content)
 
-        return CSVAgentResponse(
+        response = CSVAgentResponse(
             content=content,
             response_time=f"{elapsed_time}s",
             sources=["Vehicle Dwell Time Data"],
@@ -401,7 +470,25 @@ IMPORTANT: Use the conversation history AND the previous result context to under
             sql_query=pandas_code,
             visualization=visualization
         )
+        _set_cached_csv_response(query, response)
+        return response
 
+    except TimeoutError:
+        elapsed_time = round(time.time() - start_time, 2)
+        log_timing("csv_llm", elapsed_time, "TIMEOUT")
+        error_content = (
+            "**Request timed out** — the LLM took too long to respond.\n\n"
+            "Try a simpler query like:\n"
+            "- \"average dwell time by zone\"\n"
+            "- \"top 10 drivers by dwell hours\"\n"
+            "- \"trip count per zone\""
+        )
+        memory.add_ai(error_content)
+        return CSVAgentResponse(
+            content=error_content,
+            response_time=f"{elapsed_time}s",
+            sources=["System"]
+        )
     except json.JSONDecodeError as e:
         elapsed_time = round(time.time() - start_time, 2)
         error_content = f"**Error:** Failed to parse LLM response. {str(e)}"
@@ -420,6 +507,48 @@ IMPORTANT: Use the conversation history AND the previous result context to under
             response_time=f"{elapsed_time}s",
             sources=["Error"]
         )
+
+
+def _build_csv_response(result, summary: str, pandas_code: str, elapsed_time: float,
+                        query: str, memory) -> CSVAgentResponse:
+    """Build a CSVAgentResponse from a fixed-pattern result (DataFrame, Series, or scalar)."""
+    visualization = None
+
+    if isinstance(result, pd.DataFrame):
+        display_result = result.head(500)
+        table_data_obj = TableData(
+            columns=list(display_result.columns),
+            rows=display_result.values.tolist()
+        )
+        row_count = len(result)
+        content = f"{summary}\n\nFound {row_count} records."
+        visualization = detect_visualization(
+            list(display_result.columns), display_result.values.tolist(), query
+        )
+    elif isinstance(result, pd.Series):
+        display_result = result.head(500)
+        series_columns = [
+            str(result.index.name) if result.index.name else "category",
+            str(result.name) if result.name else "value"
+        ]
+        series_rows = [[idx, val] for idx, val in zip(display_result.index.tolist(), display_result.values.tolist())]
+        table_data_obj = TableData(columns=series_columns, rows=series_rows)
+        content = f"{summary}\n\nFound {len(result)} values."
+        visualization = detect_visualization(series_columns, series_rows, query)
+    else:
+        # Scalar result
+        table_data_obj = None
+        content = f"{summary}" if "**" in str(summary) else f"**Result:** {result}"
+
+    memory.add_ai(content)
+    return CSVAgentResponse(
+        content=content,
+        response_time=f"{elapsed_time}s",
+        sources=["Vehicle Dwell Time Data"],
+        table_data=table_data_obj,
+        sql_query=pandas_code,
+        visualization=visualization
+    )
 
 
 def _sanitize_pandas_code(code: str) -> str:

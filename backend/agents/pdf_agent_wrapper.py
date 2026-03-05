@@ -8,6 +8,8 @@ import json
 from typing import Generator, List
 from dataclasses import dataclass
 
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+
 from langchain_ollama import ChatOllama
 
 # Import retriever from pdf_agent package
@@ -15,6 +17,9 @@ from ..pdf_agent.agents.tools import retrieve_context
 
 # Import shared memory from parent
 from ..memory import SharedMemory
+
+# Timeout executor for PDF LLM calls
+_pdf_timeout_executor = ThreadPoolExecutor(max_workers=2)
 
 
 @dataclass
@@ -80,7 +85,25 @@ Instructions:
 - NEVER use general knowledge or information not present in the Document Context or Conversation History.
 - If asked about topics like geography, history, general facts, or anything completely unrelated, politely decline."""
 
-        response = llm.invoke(prompt)
+        # Invoke LLM with timeout protection (60s)
+        future = _pdf_timeout_executor.submit(llm.invoke, prompt)
+        try:
+            response = future.result(timeout=180)
+        except FuturesTimeoutError:
+            elapsed_time = round(time.time() - start_time, 2)
+            timeout_msg = (
+                "**Request timed out** — the LLM took too long to respond.\n\n"
+                "Try a more specific question like:\n"
+                "- \"What is the Industry Reference Document?\"\n"
+                "- \"What are the grid connection requirements?\""
+            )
+            memory.add_ai(timeout_msg)
+            return PDFAgentResponse(
+                content=timeout_msg,
+                response_time=f"{elapsed_time}s",
+                sources=["System"]
+            )
+
         answer = response.content
         memory.add_ai(answer)
         elapsed_time = round(time.time() - start_time, 2)
@@ -162,7 +185,13 @@ Instructions:
 
         full_answer = ""
         first_token = True
+        stream_timeout = 180  # Max seconds for entire stream
         for chunk in llm.stream(prompt):
+            # Elapsed-time guard: break stream at 90s
+            if time.time() - start_time > stream_timeout:
+                full_answer += "\n\n*(Response truncated — reached time limit)*"
+                yield _sse_message({"content": "\n\n*(Response truncated — reached time limit)*", "phase": "answer", "done": False})
+                break
             if first_token:
                 print(f"[TIMING] First token received: {time.time() - t3:.2f}s after LLM start")
                 first_token = False

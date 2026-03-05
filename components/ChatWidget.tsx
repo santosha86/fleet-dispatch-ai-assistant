@@ -364,7 +364,7 @@ const ChatWidget: React.FC = () => {
           <Bot className="text-white w-6 h-6" />
         </div>
         <div className="text-center">
-          <h2 className="text-white font-semibold text-sm tracking-wide">FleetCo Conversational Chatbot</h2>
+          <h2 className="text-white font-semibold text-sm tracking-wide">PB Conversational Chatbot</h2>
           <div className="flex items-center justify-center gap-1.5 text-[11px] text-indigo-300">
             <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse-soft"></span>
             <span>Online • {getCurrentTime()}</span>
@@ -372,80 +372,88 @@ const ChatWidget: React.FC = () => {
         </div>
       </div>
 
+      {/* Quick Category Bar - always visible (compact when conversation active) */}
+      {!isLoadingCategories && categories.length > 0 && (
+        <div className={`shrink-0 border-b border-indigo-500/20 bg-[#0f3460]/30 transition-all duration-300 ${messages.length > 0 ? 'px-3 py-2' : 'px-4 py-3'}`}>
+          {messages.length === 0 && !selectedCategory && (
+            <div className="flex flex-col items-center text-center mb-3">
+              <div className="w-12 h-12 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center mb-3 shadow-xl shadow-indigo-500/20">
+                <Bot className="text-white w-6 h-6" />
+              </div>
+              <h3 className="text-white font-bold text-base mb-0.5">How can I help you today?</h3>
+              <p className="text-slate-400 text-xs max-w-xs mx-auto">Ask questions about dispatch, waybills, contractors, and routes</p>
+            </div>
+          )}
+
+          {!selectedCategory ? (
+            <div className={`grid grid-cols-4 gap-2`}>
+              {categories.map(cat => {
+                const IconComponent = ICON_MAP[cat.icon] || Truck;
+                return (
+                  <button
+                    key={cat.id}
+                    onClick={() => setSelectedCategory(cat.id)}
+                    className={`flex items-center justify-center gap-2 bg-[#16213e] border border-indigo-500/20 rounded-lg hover:bg-indigo-600/20 hover:border-indigo-500/50 transition-all group ${
+                      messages.length > 0 ? 'p-1.5' : 'flex-col p-3'
+                    }`}
+                  >
+                    <div className={`bg-indigo-500/10 rounded-lg group-hover:bg-indigo-500/20 transition-colors ${messages.length > 0 ? 'p-1' : 'p-2 mb-1'}`}>
+                      <IconComponent size={messages.length > 0 ? 14 : 20} className="text-indigo-400 group-hover:text-white" />
+                    </div>
+                    <span className={`font-semibold text-slate-200 group-hover:text-white ${messages.length > 0 ? 'text-[11px]' : 'text-xs'}`}>{cat.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="bg-[#16213e] border border-indigo-500/20 rounded-xl overflow-hidden shadow-xl">
+              <div className="flex items-center justify-between p-2.5 border-b border-indigo-500/10 bg-[#0f3460]/50">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 bg-indigo-500/10 rounded-md">
+                    {(() => {
+                      const cat = categories.find(c => c.id === selectedCategory);
+                      const IconComponent = cat ? ICON_MAP[cat.icon] || Truck : Truck;
+                      return <IconComponent size={14} className="text-indigo-400" />;
+                    })()}
+                  </div>
+                  <span className="text-xs font-semibold text-white">
+                    {categories.find(c => c.id === selectedCategory)?.label}
+                  </span>
+                </div>
+                <button
+                  onClick={() => setSelectedCategory(null)}
+                  className="flex items-center gap-1 text-xs text-slate-400 hover:text-white px-2 py-1 hover:bg-white/5 rounded-md transition-colors"
+                >
+                  <ChevronLeft size={12} /> Back
+                </button>
+              </div>
+              <div className="p-2 space-y-1.5">
+                {categories.find(c => c.id === selectedCategory)?.queries.map((q, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => { handleSendMessage(q); setSelectedCategory(null); }}
+                    className="w-full text-left p-2.5 rounded-lg text-xs bg-indigo-500/5 border border-indigo-500/10 text-slate-300 hover:bg-indigo-500/20 hover:text-white hover:border-indigo-500/30 transition-all flex items-start gap-2 group"
+                  >
+                    <MessageSquare size={14} className="mt-0.5 shrink-0 text-indigo-400/70 group-hover:text-indigo-400" />
+                    <span>{q}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Loading categories spinner */}
+      {isLoadingCategories && (
+        <div className="flex items-center justify-center p-4 shrink-0">
+          <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+        </div>
+      )}
+
       {/* Chat Body */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar bg-[#1a1a2e]/50">
-        {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-start text-center py-4 px-2">
-            <div className="w-14 h-14 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center mb-4 shadow-xl shadow-indigo-500/20">
-              <Bot className="text-white w-7 h-7" />
-            </div>
-            <h3 className="text-white font-bold text-lg mb-1">How can I help you today?</h3>
-            <p className="text-slate-400 text-xs mb-4 max-w-xs mx-auto">Ask questions about dispatch, waybills, contractors, and routes</p>
-
-            <div className="w-full transition-all duration-300">
-               {isLoadingCategories ? (
-                 <div className="flex items-center justify-center p-4">
-                   <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
-                 </div>
-               ) : !selectedCategory ? (
-                 /* Top Level Categories */
-                 <div className="grid grid-cols-2 gap-2">
-                    {categories.map(cat => {
-                      const IconComponent = ICON_MAP[cat.icon] || Truck;
-                      return (
-                        <button
-                          key={cat.id}
-                          onClick={() => setSelectedCategory(cat.id)}
-                          className="flex flex-col items-center p-3 bg-[#16213e] border border-indigo-500/20 rounded-xl hover:bg-indigo-600/20 hover:border-indigo-500/50 hover:shadow-lg transition-all group"
-                        >
-                           <div className="p-2 bg-indigo-500/10 rounded-lg mb-2 group-hover:bg-indigo-500/20 transition-colors">
-                              <IconComponent size={20} className="text-indigo-400 group-hover:text-white" />
-                           </div>
-                           <span className="text-xs font-semibold text-slate-200 group-hover:text-white">{cat.label}</span>
-                        </button>
-                      );
-                    })}
-                 </div>
-               ) : (
-                 /* Sub Questions */
-                 <div className="bg-[#16213e] border border-indigo-500/20 rounded-xl overflow-hidden shadow-xl">
-                    <div className="flex items-center justify-between p-3 border-b border-indigo-500/10 bg-[#0f3460]/50">
-                       <div className="flex items-center gap-2">
-                          <div className="p-1.5 bg-indigo-500/10 rounded-md">
-                             {(() => {
-                                const cat = categories.find(c => c.id === selectedCategory);
-                                const IconComponent = cat ? ICON_MAP[cat.icon] || Truck : Truck;
-                                return <IconComponent size={14} className="text-indigo-400" />;
-                             })()}
-                          </div>
-                          <span className="text-xs font-semibold text-white">
-                             {categories.find(c => c.id === selectedCategory)?.label}
-                          </span>
-                       </div>
-                       <button
-                         onClick={() => setSelectedCategory(null)}
-                         className="flex items-center gap-1 text-xs text-slate-400 hover:text-white px-2 py-1 hover:bg-white/5 rounded-md transition-colors"
-                       >
-                          <ChevronLeft size={12} /> Back
-                       </button>
-                    </div>
-                    <div className="p-2 space-y-1.5">
-                       {categories.find(c => c.id === selectedCategory)?.queries.map((q, idx) => (
-                         <button
-                           key={idx}
-                           onClick={() => handleSendMessage(q)}
-                           className="w-full text-left p-2.5 rounded-lg text-xs bg-indigo-500/5 border border-indigo-500/10 text-slate-300 hover:bg-indigo-500/20 hover:text-white hover:border-indigo-500/30 transition-all flex items-start gap-2 group"
-                         >
-                            <MessageSquare size={14} className="mt-0.5 shrink-0 text-indigo-400/70 group-hover:text-indigo-400" />
-                            <span>{q}</span>
-                         </button>
-                       ))}
-                    </div>
-                 </div>
-               )}
-            </div>
-          </div>
-        ) : (
+        {messages.length > 0 && (
           messages.map((msg) => (
             <div 
               key={msg.id} 

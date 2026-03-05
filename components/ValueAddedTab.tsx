@@ -92,7 +92,7 @@ const ValueAddedTab: React.FC = () => {
 
       {/* Footer */}
       <div className="bg-gradient-to-r from-teal-800 to-teal-700 text-yellow-400 text-center p-4 rounded-xl text-sm font-medium shadow-lg">
-        © 2025 FleetCo Logistics Intelligence Platform - Data-Driven Chatbot POC v1.0 | Connected to: ODW Online • SAP Finance • Telematics
+        © 2025 PB Logistics Intelligence Platform - Data-Driven Chatbot POC v1.0 | Connected to: ODW Online • SAP Finance • Telematics
       </div>
     </div>
   );

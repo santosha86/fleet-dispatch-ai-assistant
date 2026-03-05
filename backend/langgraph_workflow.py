@@ -30,7 +30,7 @@ class WorkflowState(TypedDict):
     query: str
     session_id: str
 
-    route: Optional[Literal["sql", "csv", "pdf", "math", "meta", "out_of_scope"]]
+    route: Optional[Literal["sql", "csv", "pdf", "math", "meta", "out_of_scope", "greeting"]]
 
     content: Optional[str]
     response_time: Optional[str]
@@ -68,7 +68,7 @@ def router_node(state: WorkflowState) -> WorkflowState:
         }
 
     # If route is already set (forced), skip classification
-    if state.get("route") and state["route"] in ["sql", "csv", "pdf", "math"]:
+    if state.get("route") and state["route"] in ["sql", "csv", "pdf", "math", "greeting"]:
         route = state["route"]
         log_timing("router", time.time() - t0, f"forced route: {route}")
         # Store forced route for follow-up detection
@@ -162,13 +162,48 @@ def math_agent_node(state: WorkflowState) -> WorkflowState:
     }
 
 
+def greeting_node(state: WorkflowState) -> WorkflowState:
+    """
+    Return a friendly greeting with capabilities list (instant, no LLM).
+    """
+    return {
+        **state,
+        "content": (
+            "Hello! I'm your **Fleet Dispatch Assistant**. I can help you with:\n\n"
+            "- **Waybill queries** — status, counts, details, filtering by contractor/plant/route\n"
+            "- **Vehicle dwell times** — zone analysis, driver performance, trip counts\n"
+            "- **Industry Reference Document** — regulations, compliance, technical standards\n"
+            "- **Math calculations** — arithmetic, percentages, scientific functions\n\n"
+            "Try asking something like:\n"
+            "- *\"How many waybills are delivered?\"*\n"
+            "- *\"Average dwell time by zone\"*\n"
+            "- *\"What is the Industry Reference Document about?\"*\n"
+            "- *\"Calculate 15% of 2500\"*"
+        ),
+        "response_time": "0s",
+        "sources": ["System"],
+        "table_data": None,
+        "sql_query": None,
+        "needs_disambiguation": False,
+        "disambiguation_options": None,
+        "visualization": None
+    }
+
+
 def out_of_scope_node(state: WorkflowState) -> WorkflowState:
     """
     Return out-of-scope response when query is not related to our data sources.
     """
     return {
         **state,
-        "content": "I can't answer this question because it's outside my data. I can help you with dispatch operations, waybills, vehicle dwell times, or Industry Reference Document documents.",
+        "content": (
+            "I can't answer this question — it's outside my data sources.\n\n"
+            "I can help you with:\n"
+            "- **Dispatch & waybills** — status, counts, contractor info\n"
+            "- **Vehicle dwell times** — zones, drivers, durations\n"
+            "- **Industry Reference Document** — regulations, standards\n"
+            "- **Math** — calculations, percentages"
+        ),
         "response_time": "0s",
         "sources": ["System"],
         "table_data": None,
@@ -204,6 +239,7 @@ def build_workflow() -> StateGraph:
     workflow.add_node("csv_agent", csv_agent_node)
     workflow.add_node("pdf_agent", pdf_agent_node)
     workflow.add_node("math_agent", math_agent_node)
+    workflow.add_node("greeting", greeting_node)
     workflow.add_node("out_of_scope", out_of_scope_node)
     workflow.add_node("meta", meta_node)
 
@@ -219,6 +255,7 @@ def build_workflow() -> StateGraph:
             "csv": "csv_agent",
             "pdf": "pdf_agent",
             "math": "math_agent",
+            "greeting": "greeting",
             "out_of_scope": "out_of_scope",
             "meta": "meta"
         }
@@ -229,6 +266,7 @@ def build_workflow() -> StateGraph:
     workflow.add_edge("csv_agent", END)
     workflow.add_edge("pdf_agent", END)
     workflow.add_edge("math_agent", END)
+    workflow.add_edge("greeting", END)
     workflow.add_edge("out_of_scope", END)
     workflow.add_edge("meta", END)
 

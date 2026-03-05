@@ -1,5 +1,5 @@
 def main():
-    print("Hello from fleet-dispatch-assistant!")
+    print("Hello from pb-ai-dispatch-assistant!")
 
 
 if __name__ == "__main__":

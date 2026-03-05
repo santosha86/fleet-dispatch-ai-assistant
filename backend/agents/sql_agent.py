@@ -410,7 +410,7 @@ IMPORTANT: Use the conversation history AND the previous result context to under
         human_msg = HumanMessage(content=prompt_text)
 
         t0 = time.time()
-        response = invoke_with_timeout([system_msg, human_msg], timeout=120)
+        response = invoke_with_timeout([system_msg, human_msg], timeout=180)
         log_timing("sql_gen", time.time() - t0, "LLM SQL generation")
 
         raw_content = response.content
@@ -488,7 +488,15 @@ IMPORTANT: Use the conversation history AND the previous result context to under
         elapsed_time = round(time.time() - start_time, 2)
         log_timing("sql_gen", elapsed_time, "TIMEOUT")
         return SQLAgentResponse(
-            content=f'**Error:** LLM timed out after 120 seconds. Please try a simpler query.',
+            content=(
+                "**Request timed out** — the LLM took too long to generate SQL.\n\n"
+                "Try one of these instant queries:\n"
+                "- \"How many waybills are delivered?\"\n"
+                "- \"Waybill count by month\"\n"
+                "- \"Status of waybill D6-25-0039536\"\n"
+                "- \"Top vendors by waybills\"\n"
+                "- \"Waybills for plant CP01\""
+            ),
             response_time=f"{elapsed_time}s",
             sources=["System"]
         )

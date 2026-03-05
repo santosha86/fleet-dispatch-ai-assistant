@@ -63,7 +63,7 @@ $RECYCLE.BIN/
 # APK (built artifact, served from backend/static/)
 backend/static/app-release.apk
 
-# Claude Code
+# IDE/Tool config
 .claude/
 
 # Large data files

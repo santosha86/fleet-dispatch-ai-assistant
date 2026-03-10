@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../constants';
+import { apiFetch } from '../apiClient';
 
 interface UsageStatsData {
   queries_processed: number;
@@ -19,11 +20,8 @@ const UsageStats: React.FC = () => {
 
     const fetchData = async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/api/usage-stats`, {
+        const response = await apiFetch('/api/usage-stats', {
           signal: controller.signal,
-          headers: {
-            'ngrok-skip-browser-warning': 'true'
-          }
         });
         if (response.ok) {
           const result = await response.json();

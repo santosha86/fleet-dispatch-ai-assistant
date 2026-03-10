@@ -181,29 +181,36 @@ class AuthNotifier extends StateNotifier<AuthState> {
     state = state.copyWith(isBiometricsEnabled: enabled);
   }
 
-  /// Login with username and password
+  /// Login with username and password via backend API
   Future<bool> login(String username, String password) async {
-    if (!_authService.validateCredentials(username, password)) {
-      state = state.copyWith(error: 'Invalid username or password.');
+    try {
+      final returnedUsername = await _authService.loginRemote(username, password);
+      await _authService.setLoggedIn(true);
+      await _authService.setUsername(returnedUsername);
+      state = state.copyWith(
+        isLoggedIn: true,
+        username: returnedUsername,
+        error: null,
+      );
+      // Continue with PIN check flow
+      await _initialize();
+      return true;
+    } catch (e) {
+      String errorMsg = 'Invalid username or password.';
+      if (e.toString().contains('SocketException') ||
+          e.toString().contains('Connection') ||
+          e.toString().contains('timeout')) {
+        errorMsg = 'Cannot reach server. Check your connection.';
+      }
+      state = state.copyWith(error: errorMsg);
       return false;
     }
-
-    await _authService.setLoggedIn(true);
-    await _authService.setUsername(username);
-    state = state.copyWith(
-      isLoggedIn: true,
-      username: username.trim().toLowerCase(),
-      error: null,
-    );
-
-    // Continue with PIN check flow
-    await _initialize();
-    return true;
   }
 
-  /// Logout — clears login state, returns to login screen
+  /// Logout — clears login state and token, returns to login screen
   Future<void> logout() async {
     await _authService.setLoggedIn(false);
+    await _authService.clearToken();
     state = const AuthState(status: AuthStatus.loggedOut);
   }
 

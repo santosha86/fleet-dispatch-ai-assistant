@@ -1,8 +1,11 @@
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:local_auth/local_auth.dart';
+
+import '../core/config/app_config.dart';
 
 class AuthService {
   static const _pinHashKey = 'fleet_pin_hash';
@@ -10,15 +13,7 @@ class AuthService {
   static const _biometricsEnabledKey = 'fleet_biometrics_enabled';
   static const _loggedInKey = 'fleet_logged_in';
   static const _usernameKey = 'fleet_username';
-
-  /// All valid users (case-insensitive usernames)
-  static const _users = {
-    'pb': 'admin1234',
-    'user1': 'user1pass',
-    'user2': 'user2pass',
-    'user3': 'user3pass',
-    'user4': 'user4pass',
-  };
+  static const _tokenKey = 'fleet_auth_token';
 
   final FlutterSecureStorage _storage;
   final LocalAuthentication _localAuth;
@@ -135,11 +130,36 @@ class AuthService {
     await _storage.write(key: _loggedInKey, value: loggedIn.toString());
   }
 
-  /// Validate login credentials (case-insensitive username)
-  bool validateCredentials(String username, String password) {
-    final normalizedUsername = username.trim().toLowerCase();
-    final expectedPassword = _users[normalizedUsername];
-    return expectedPassword != null && expectedPassword == password;
+  /// Login via backend API — returns username or throws
+  Future<String> loginRemote(String username, String password) async {
+    final dio = Dio(BaseOptions(
+      baseUrl: AppConfig.apiBaseUrl,
+      connectTimeout: AppConfig.connectTimeout,
+      receiveTimeout: const Duration(seconds: 30),
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+    ));
+
+    final response = await dio.post('/api/login', data: {
+      'username': username,
+      'password': password,
+    });
+
+    final token = response.data['access_token'] as String;
+    await _storage.write(key: _tokenKey, value: token);
+    return response.data['username'] as String;
+  }
+
+  /// Get stored JWT token
+  Future<String?> getToken() async {
+    return await _storage.read(key: _tokenKey);
+  }
+
+  /// Clear JWT token
+  Future<void> clearToken() async {
+    await _storage.delete(key: _tokenKey);
   }
 
   /// Store the logged-in username
@@ -159,5 +179,6 @@ class AuthService {
     await _storage.delete(key: _biometricsEnabledKey);
     await _storage.delete(key: _loggedInKey);
     await _storage.delete(key: _usernameKey);
+    await _storage.delete(key: _tokenKey);
   }
 }

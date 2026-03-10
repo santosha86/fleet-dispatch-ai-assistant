@@ -10,10 +10,17 @@ import '../models/sse_event.dart';
 import '../services/cache_service.dart';
 import '../services/chat_service.dart';
 import '../services/session_service.dart';
+import 'auth_provider.dart';
 
 // --- Dependency Providers ---
 
-final apiClientProvider = Provider<ApiClient>((ref) => ApiClient());
+final apiClientProvider = Provider<ApiClient>((ref) {
+  final client = ApiClient();
+  client.onUnauthorized = () {
+    ref.read(authProvider.notifier).logout();
+  };
+  return client;
+});
 
 final sseClientProvider = Provider<SSEClient>((ref) {
   return SSEClient(ref.read(apiClientProvider));

@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import { ChatMessage, DisambiguationOption, ClarificationOption, VisualizationConfig } from '../types';
 import { API_BASE_URL } from '../constants';
+import { apiFetch } from '../apiClient';
 import DataVisualization from './DataVisualization';
 
 // Icon mapping for dynamic icons from API
@@ -62,11 +63,8 @@ const ChatWidget: React.FC = () => {
 
     const fetchCategories = async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/api/categories`, {
+        const response = await apiFetch('/api/categories', {
           signal: controller.signal,
-          headers: {
-            'ngrok-skip-browser-warning': 'true'
-          }
         });
         if (response.ok) {
           const data = await response.json();
@@ -120,12 +118,9 @@ const ChatWidget: React.FC = () => {
 
       // Step 1: Get route classification (skip if route is forced from clarification)
       if (!route) {
-        const routeResponse = await fetch(`${API_BASE_URL}/api/route`, {
+        const routeResponse = await apiFetch('/api/route', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': 'true'
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ query: text, session_id: sessionId }),
         });
 
@@ -136,12 +131,9 @@ const ChatWidget: React.FC = () => {
 
       if (route === 'sql' || route === 'csv') {
         // Step 2a: SQL/CSV queries - use non-streaming endpoint
-        const response = await fetch(`${API_BASE_URL}/api/query`, {
+        const response = await apiFetch('/api/query', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': 'true'
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ query: text, session_id: sessionId, route: route }),
         });
 
@@ -173,12 +165,9 @@ const ChatWidget: React.FC = () => {
 
       } else if (route === 'clarify') {
         // Step 2b: Clarification needed - run workflow to get clarification options
-        const response = await fetch(`${API_BASE_URL}/api/query`, {
+        const response = await apiFetch('/api/query', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': 'true'
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ query: text, session_id: sessionId }),
         });
 
@@ -205,12 +194,9 @@ const ChatWidget: React.FC = () => {
 
       } else {
         // Step 2b: PDF queries - use streaming endpoint
-        const response = await fetch(`${API_BASE_URL}/api/query/stream`, {
+        const response = await apiFetch('/api/query/stream', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': 'true'
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ query: text, session_id: sessionId, route: route }),
         });
 
@@ -313,12 +299,9 @@ const ChatWidget: React.FC = () => {
 
     // Clear server session memory
     try {
-      await fetch(`${API_BASE_URL}/api/session/clear`, {
+      await apiFetch('/api/session/clear', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': 'true'
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId })
       });
     } catch (error) {

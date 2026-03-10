@@ -2,12 +2,13 @@ import React, { useState, useEffect, FormEvent } from 'react';
 import ValueAddedTab from './components/ValueAddedTab';
 import LiveDemoTab from './components/LiveDemoTab';
 import ErrorBoundary from './components/ErrorBoundary';
+import { setToken, clearAuth, getToken } from './apiClient';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'value' | 'demo'>('value');
-  const [loggedIn, setLoggedIn] = useState(() => sessionStorage.getItem('loggedIn') === 'true');
+  const [loggedIn, setLoggedIn] = useState(() => !!getToken());
   const [username, setUsername] = useState(() => sessionStorage.getItem('username') || '');
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
@@ -36,6 +37,7 @@ const App: React.FC = () => {
       });
       if (res.ok) {
         const data = await res.json();
+        setToken(data.access_token);
         setUsername(data.username);
         setLoggedIn(true);
       } else {
@@ -49,6 +51,7 @@ const App: React.FC = () => {
   };
 
   const handleLogout = () => {
+    clearAuth();
     setLoggedIn(false);
     setUsername('');
     setLoginUsername('');

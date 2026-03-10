@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Check, X, Search, BarChart2, Lightbulb, TrendingUp } from 'lucide-react';
 import { API_BASE_URL } from '../constants';
+import { apiFetch } from '../apiClient';
 
 // Icon mapping for capabilities
 const CAPABILITY_ICONS: Record<string, string> = {
@@ -49,11 +50,8 @@ const InfoPanel: React.FC = () => {
 
     const fetchData = async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/api/ai-overview`, {
+        const response = await apiFetch('/api/ai-overview', {
           signal: controller.signal,
-          headers: {
-            'ngrok-skip-browser-warning': 'true'
-          }
         });
         if (response.ok) {
           const result = await response.json();

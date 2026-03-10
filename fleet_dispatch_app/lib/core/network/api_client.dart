@@ -1,11 +1,19 @@
+import 'dart:ui';
+
 import 'package:dio/dio.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../config/app_config.dart';
 import 'api_exceptions.dart';
 
 class ApiClient {
   late final Dio _dio;
+  final FlutterSecureStorage _storage;
 
-  ApiClient({String? baseUrl}) {
+  /// Called when a 401 is received — triggers logout in auth provider
+  VoidCallback? onUnauthorized;
+
+  ApiClient({String? baseUrl, FlutterSecureStorage? storage})
+      : _storage = storage ?? const FlutterSecureStorage() {
     _dio = Dio(BaseOptions(
       baseUrl: baseUrl ?? AppConfig.apiBaseUrl,
       connectTimeout: AppConfig.connectTimeout,
@@ -14,6 +22,27 @@ class ApiClient {
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
+      },
+    ));
+
+    // Auth interceptor — adds Bearer token and handles 401
+    _dio.interceptors.add(InterceptorsWrapper(
+      onRequest: (options, handler) async {
+        // Skip auth header for login endpoint
+        if (!options.path.contains('/api/login')) {
+          final token = await _storage.read(key: 'fleet_auth_token');
+          if (token != null) {
+            options.headers['Authorization'] = 'Bearer $token';
+          }
+        }
+        handler.next(options);
+      },
+      onError: (error, handler) async {
+        if (error.response?.statusCode == 401) {
+          await _storage.delete(key: 'fleet_auth_token');
+          onUnauthorized?.call();
+        }
+        handler.next(error);
       },
     ));
 

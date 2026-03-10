@@ -1,11 +1,12 @@
 import math
+import os
 import time
 import asyncio
 import threading
 
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -20,6 +21,10 @@ from .fixed_queries import FIXED_QUERIES
 from .langgraph_workflow import run_workflow, get_route_for_query
 from .agents.pdf_agent_wrapper import stream_pdf_agent
 from .memory import SharedMemory
+from .auth import authenticate_user, create_access_token, get_current_user
+from .input_validator import validate_query
+from .rate_limiter import rate_limiter
+from .audit_log import AuditMiddleware
 
 # --- In-memory result cache for pagination ---
 # Dict keyed by result_id -> { "columns": [...], "rows": [...], "created_at": float }
@@ -85,30 +90,43 @@ app = FastAPI(title="Fleet Dispatch AI Assistant API", version="1.0.0")
 _dist_dir = Path(__file__).resolve().parent.parent / "dist"
 _web_enabled = _dist_dir.is_dir()
 
-# CORS middleware for frontend access
-# For production, replace ["*"] with specific domains
+# Audit logging middleware
+app.add_middleware(AuditMiddleware)
+
+# CORS middleware — configurable via CORS_ORIGINS env var (comma-separated)
+_ALLOWED_ORIGINS = (
+    os.environ.get("CORS_ORIGINS", "").split(",")
+    if os.environ.get("CORS_ORIGINS")
+    else [
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "http://<server-ip>:8000",
+        "http://<server-ip>:8000",
+    ]
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "ngrok-skip-browser-warning"],
 )
 
 
-# --- Authentication ---
-USERS = {
-    "pb": "admin1234",
-    "user1": "user1pass",
-    "user2": "user2pass",
-    "user3": "user3pass",
-    "user4": "user4pass",
-}
+# --- Authentication (JWT-based, see backend/auth.py) ---
 
 
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    username: str
+    expires_in: int  # seconds
 
 
 class ComparisonItem(BaseModel):
@@ -335,13 +353,18 @@ MOCK_RESPONSES = {
 
 
 
-@app.post("/api/login")
+@app.post("/api/login", response_model=TokenResponse)
 async def login(request: LoginRequest):
-    """Validate user credentials."""
-    username = request.username.strip().lower()
-    if USERS.get(username) == request.password:
-        return {"success": True, "username": username}
-    raise HTTPException(status_code=401, detail="Invalid username or password")
+    """Authenticate user and return JWT access token."""
+    username = authenticate_user(request.username, request.password)
+    if not username:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    token = create_access_token(username)
+    return TokenResponse(
+        access_token=token,
+        username=username,
+        expires_in=8 * 3600,
+    )
 
 
 @app.get("/")
@@ -352,25 +375,25 @@ async def root():
 
 
 @app.get("/api/ai-overview", response_model=AIAssistantOverview)
-async def get_ai_overview():
+async def get_ai_overview(current_user: str = Depends(get_current_user)):
     """Get AI Assistant Overview data for the InfoPanel"""
     return AI_OVERVIEW_DATA
 
 
 @app.get("/api/usage-stats", response_model=UsageStatsData)
-async def get_usage_stats():
+async def get_usage_stats(current_user: str = Depends(get_current_user)):
     """Get usage statistics data"""
     return USAGE_STATS_DATA
 
 
 @app.get("/api/categories", response_model=List[Category])
-async def get_categories():
+async def get_categories(current_user: str = Depends(get_current_user)):
     """Get query categories and their sample questions"""
     return CATEGORIES_DATA
 
 
 @app.get("/api/categories/{category_id}/queries", response_model=List[str])
-async def get_category_queries(category_id: str):
+async def get_category_queries(category_id: str, current_user: str = Depends(get_current_user)):
     """Get questions for a specific category"""
     for category in CATEGORIES_DATA:
         if category.id == category_id:
@@ -379,13 +402,14 @@ async def get_category_queries(category_id: str):
 
 
 @app.post("/api/query", response_model=QueryResponse)
-async def process_query(user_query: UserQuery):
+async def process_query(user_query: UserQuery, current_user: str = Depends(get_current_user)):
     """
     Process a user query through the LangGraph workflow.
     Routes to SQL agent for dispatch/waybill queries, PDF agent for document queries.
     Supports forced route from clarification flow.
     """
-    query_text = user_query.query.strip()
+    rate_limiter.check(current_user)
+    query_text = validate_query(user_query.query)
     session_id = user_query.session_id or str(uuid.uuid4())
     forced_route = user_query.route  # Optional forced route from clarification
 
@@ -465,7 +489,7 @@ async def process_query(user_query: UserQuery):
 
 
 @app.post("/api/query/stream")
-async def process_query_stream(user_query: UserQuery):
+async def process_query_stream(user_query: UserQuery, current_user: str = Depends(get_current_user)):
     """
     Streaming endpoint for queries.
     Uses Server-Sent Events (SSE) format.
@@ -473,7 +497,8 @@ async def process_query_stream(user_query: UserQuery):
     - SQL/CSV queries return immediately as single SSE message
     - Clarify requests return options for user to select
     """
-    query_text = user_query.query.strip()
+    rate_limiter.check(current_user)
+    query_text = validate_query(user_query.query)
     session_id = user_query.session_id or str(uuid.uuid4())
 
     # Use provided route or classify (avoid double classification from frontend)
@@ -580,7 +605,7 @@ async def process_query_stream(user_query: UserQuery):
 
 
 @app.get("/api/table-data/{result_id}", response_model=TableData)
-async def get_table_data_page(result_id: str, page: int = 1, page_size: int = _DEFAULT_PAGE_SIZE):
+async def get_table_data_page(result_id: str, page: int = 1, page_size: int = _DEFAULT_PAGE_SIZE, current_user: str = Depends(get_current_user)):
     """Fetch a specific page from a cached query result."""
     if page < 1:
         raise HTTPException(status_code=400, detail="Page must be >= 1")
@@ -599,15 +624,16 @@ class SessionClear(BaseModel):
 
 
 @app.post("/api/route")
-async def get_query_route(user_query: UserQuery):
+async def get_query_route(user_query: UserQuery, current_user: str = Depends(get_current_user)):
     """Return the route classification for a query (sql, csv, or pdf)."""
+    rate_limiter.check(current_user)
     session_id = user_query.session_id or "default"
     route = await asyncio.to_thread(get_route_for_query, user_query.query.strip(), session_id)
     return {"route": route}
 
 
 @app.post("/api/session/clear")
-async def clear_session(request: SessionClear):
+async def clear_session(request: SessionClear, current_user: str = Depends(get_current_user)):
     """Clear conversation history for a session."""
     SharedMemory.clear_session(request.session_id)
     return {"status": "cleared", "session_id": request.session_id}

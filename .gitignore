@@ -60,6 +60,9 @@ Thumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 
+# Security (generated at runtime, contains hashed passwords)
+backend/users.json
+
 # APK (built artifact, served from backend/static/)
 backend/static/app-release.apk
 

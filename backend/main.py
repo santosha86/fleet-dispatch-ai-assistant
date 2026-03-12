@@ -21,10 +21,18 @@ from .fixed_queries import FIXED_QUERIES
 from .langgraph_workflow import run_workflow, get_route_for_query
 from .agents.pdf_agent_wrapper import stream_pdf_agent
 from .memory import SharedMemory
-from .auth import authenticate_user, create_access_token, get_current_user
+from .auth import (
+    authenticate_user, create_access_token, create_refresh_token,
+    verify_refresh_token, create_mfa_pending_token, verify_mfa_pending_token,
+    get_current_user, load_users, save_users,
+)
+from .rbac import check_permission, get_user_role
 from .input_validator import validate_query
 from .rate_limiter import rate_limiter
 from .audit_log import AuditMiddleware
+from .data_retention import start_retention_scheduler
+from .mfa import generate_totp_secret, get_totp_uri, verify_totp, generate_qr_code
+from .encryption import encrypt_sensitive_columns
 
 # --- In-memory result cache for pagination ---
 # Dict keyed by result_id -> { "columns": [...], "rows": [...], "created_at": float }
@@ -58,19 +66,23 @@ def _cache_store(columns: list, rows: list) -> str:
 
 
 def _cache_get_page(result_id: str, page: int, page_size: int) -> Optional[dict]:
-    """Retrieve a page from the cached result set."""
+    """Retrieve a page from the cached result set. Decrypts sensitive columns before returning."""
     with _cache_lock:
         entry = _result_cache.get(result_id)
     if entry is None:
         return None
     rows = entry["rows"]
+    columns = entry["columns"]
     total = len(rows)
     total_pages = max(1, math.ceil(total / page_size))
     start = (page - 1) * page_size
     end = start + page_size
+    # Decrypt sensitive columns so client sees readable data
+    from .encryption import decrypt_sensitive_columns
+    page_rows = decrypt_sensitive_columns(rows[start:end], columns)
     return {
-        "columns": entry["columns"],
-        "rows": rows[start:end],
+        "columns": columns,
+        "rows": page_rows,
         "total_row_count": total,
         "page": page,
         "total_pages": total_pages,
@@ -84,7 +96,10 @@ class EndpointFilter(logging.Filter):
 
 logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 
-app = FastAPI(title="Fleet Dispatch AI Assistant API", version="1.0.0")
+app = FastAPI(title="Fleet Dispatch AI Assistant API", version="1.2.0")
+
+# Start data retention scheduler (background cleanup of audit logs and caches)
+start_retention_scheduler()
 
 # React production build directory
 _dist_dir = Path(__file__).resolve().parent.parent / "dist"
@@ -124,9 +139,13 @@ class LoginRequest(BaseModel):
 
 class TokenResponse(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
     username: str
+    role: str
     expires_in: int  # seconds
+    requires_mfa: bool = False
+    mfa_token: Optional[str] = None
 
 
 class ComparisonItem(BaseModel):
@@ -353,16 +372,36 @@ MOCK_RESPONSES = {
 
 
 
-@app.post("/api/login", response_model=TokenResponse)
+@app.post("/api/login")
 async def login(request: LoginRequest):
-    """Authenticate user and return JWT access token."""
+    """Authenticate user and return JWT access token (or MFA challenge)."""
     username = authenticate_user(request.username, request.password)
     if not username:
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    token = create_access_token(username)
+
+    role = get_user_role(username)
+
+    # Check if MFA is enabled for this user
+    users = load_users()
+    user_data = users.get(username, {})
+    if user_data.get("mfa_enabled") and user_data.get("mfa_secret"):
+        # Return MFA challenge instead of full tokens
+        mfa_token = create_mfa_pending_token(username)
+        return {
+            "requires_mfa": True,
+            "mfa_token": mfa_token,
+            "username": username,
+            "role": role,
+        }
+
+    # No MFA — issue full tokens
+    token = create_access_token(username, role=role)
+    refresh = create_refresh_token(username)
     return TokenResponse(
         access_token=token,
+        refresh_token=refresh,
         username=username,
+        role=role,
         expires_in=8 * 3600,
     )
 
@@ -371,7 +410,7 @@ async def login(request: LoginRequest):
 async def root():
     if _web_enabled:
         return FileResponse(_dist_dir / "index.html")
-    return {"message": "Fleet Dispatch AI Assistant API", "version": "1.0.0"}
+    return {"message": "Fleet Dispatch AI Assistant API", "version": "1.2.0"}
 
 
 @app.get("/api/ai-overview", response_model=AIAssistantOverview)
@@ -421,9 +460,18 @@ async def process_query(user_query: UserQuery, current_user: str = Depends(get_c
             sources=response_data["sources"]
         )
 
+    # RBAC: pre-check permission if route is forced, otherwise check after routing
+    if forced_route:
+        check_permission(current_user, forced_route)
+
     # Run through LangGraph workflow (with optional forced route)
     # Use asyncio.to_thread to avoid blocking the event loop with synchronous LangGraph
     result = await asyncio.to_thread(run_workflow, query_text, session_id, forced_route)
+
+    # RBAC: check permission on the determined route
+    determined_route = result.get("route")
+    if determined_route and not forced_route:
+        check_permission(current_user, determined_route)
 
     # Build disambiguation options if present
     disambiguation_options = None
@@ -449,13 +497,16 @@ async def process_query(user_query: UserQuery, current_user: str = Depends(get_c
     if result["table_data"]:
         td = result["table_data"]
         all_rows = td["rows"]
+        columns = td["columns"]
         total_count = len(all_rows)
         page_size = user_query.page_size or _DEFAULT_PAGE_SIZE
 
         if total_count > page_size:
-            # Cache full result and return only page 1
-            result_id = _cache_store(td["columns"], all_rows)
+            # Encrypt sensitive columns for at-rest protection in cache
+            encrypted_rows = encrypt_sensitive_columns(all_rows, columns)
+            result_id = _cache_store(td["columns"], encrypted_rows)
             total_pages = math.ceil(total_count / page_size)
+            # Send plaintext page 1 to client (user sees readable data)
             table_data_obj = TableData(
                 columns=td["columns"],
                 rows=all_rows[:page_size],
@@ -467,6 +518,7 @@ async def process_query(user_query: UserQuery, current_user: str = Depends(get_c
                 page_size=page_size,
             )
         else:
+            # Small result — not cached, send plaintext directly
             table_data_obj = TableData(
                 columns=td["columns"],
                 rows=all_rows,
@@ -503,6 +555,9 @@ async def process_query_stream(user_query: UserQuery, current_user: str = Depend
 
     # Use provided route or classify (avoid double classification from frontend)
     route = user_query.route or await asyncio.to_thread(get_route_for_query, query_text, session_id)
+
+    # RBAC: check permission on the determined route
+    check_permission(current_user, route)
 
     if route in ("greeting", "out_of_scope"):
         # Instant response — no LLM needed, run through workflow
@@ -554,11 +609,14 @@ async def process_query_stream(user_query: UserQuery, current_user: str = Depend
         table_data_resp = result["table_data"]
         if table_data_resp:
             all_rows = table_data_resp.get("rows", [])
+            columns = table_data_resp.get("columns", [])
             total_count = len(all_rows)
             page_size = user_query.page_size or _DEFAULT_PAGE_SIZE
 
             if total_count > page_size:
-                result_id = _cache_store(table_data_resp["columns"], all_rows)
+                # Encrypt for at-rest cache, send plaintext page 1
+                encrypted_rows = encrypt_sensitive_columns(all_rows, columns)
+                result_id = _cache_store(table_data_resp["columns"], encrypted_rows)
                 total_pages = math.ceil(total_count / page_size)
                 table_data_resp = {
                     **table_data_resp,
@@ -571,6 +629,7 @@ async def process_query_stream(user_query: UserQuery, current_user: str = Depend
                     "page_size": page_size,
                 }
             else:
+                # Small result — send plaintext directly
                 table_data_resp = {
                     **table_data_resp,
                     "total_row_count": total_count,
@@ -629,7 +688,11 @@ async def get_query_route(user_query: UserQuery, current_user: str = Depends(get
     rate_limiter.check(current_user)
     session_id = user_query.session_id or "default"
     route = await asyncio.to_thread(get_route_for_query, user_query.query.strip(), session_id)
-    return {"route": route}
+    # Check if user has permission for this route
+    from .rbac import ROLE_PERMISSIONS
+    role = get_user_role(current_user)
+    has_permission = route in ROLE_PERMISSIONS.get(role, [])
+    return {"route": route, "has_permission": has_permission}
 
 
 @app.post("/api/session/clear")
@@ -637,6 +700,182 @@ async def clear_session(request: SessionClear, current_user: str = Depends(get_c
     """Clear conversation history for a session."""
     SharedMemory.clear_session(request.session_id)
     return {"status": "cleared", "session_id": request.session_id}
+
+
+# --- Token Refresh ---
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+
+@app.post("/api/token/refresh")
+async def refresh_token(request: RefreshTokenRequest):
+    """Exchange a valid refresh token for a new access token."""
+    username = verify_refresh_token(request.refresh_token)
+    role = get_user_role(username)
+    new_access = create_access_token(username, role=role)
+    return {
+        "access_token": new_access,
+        "refresh_token": request.refresh_token,  # return same refresh token
+        "token_type": "bearer",
+        "username": username,
+        "role": role,
+        "expires_in": 8 * 3600,
+    }
+
+
+# --- MFA Endpoints ---
+
+
+class MfaVerifyRequest(BaseModel):
+    code: str
+
+
+class MfaLoginRequest(BaseModel):
+    mfa_token: str
+    totp_code: str
+
+
+class MfaDisableRequest(BaseModel):
+    password: str
+    totp_code: str
+
+
+@app.post("/api/mfa/status")
+async def mfa_status(current_user: str = Depends(get_current_user)):
+    """Check if MFA is enabled for the current user."""
+    users = load_users()
+    user_data = users.get(current_user, {})
+    return {
+        "mfa_enabled": bool(user_data.get("mfa_enabled")),
+        "username": current_user,
+    }
+
+
+@app.post("/api/mfa/setup")
+async def mfa_setup(current_user: str = Depends(get_current_user)):
+    """Generate TOTP secret and QR code for MFA setup. Requires auth."""
+    users = load_users()
+    user_data = users.get(current_user, {})
+
+    if user_data.get("mfa_enabled"):
+        raise HTTPException(status_code=400, detail="MFA is already enabled.")
+
+    secret = generate_totp_secret()
+    uri = get_totp_uri(current_user, secret)
+    qr_base64 = generate_qr_code(uri)
+
+    # Store secret but don't enable yet (user must verify first)
+    user_data["mfa_secret"] = secret
+    user_data["mfa_enabled"] = False
+    users[current_user] = user_data
+    save_users(users)
+
+    return {
+        "secret": secret,
+        "qr_code": qr_base64,
+        "uri": uri,
+        "message": "Scan the QR code with your authenticator app, then verify with /api/mfa/verify.",
+    }
+
+
+@app.post("/api/mfa/verify")
+async def mfa_verify(request: MfaVerifyRequest, current_user: str = Depends(get_current_user)):
+    """Verify TOTP code during setup to enable MFA."""
+    users = load_users()
+    user_data = users.get(current_user, {})
+    secret = user_data.get("mfa_secret")
+
+    if not secret:
+        raise HTTPException(status_code=400, detail="MFA setup not started. Call /api/mfa/setup first.")
+
+    if user_data.get("mfa_enabled"):
+        raise HTTPException(status_code=400, detail="MFA is already enabled.")
+
+    if not verify_totp(secret, request.code):
+        raise HTTPException(status_code=401, detail="Invalid TOTP code. Please try again.")
+
+    # Enable MFA
+    user_data["mfa_enabled"] = True
+    users[current_user] = user_data
+    save_users(users)
+
+    return {"message": "MFA enabled successfully.", "mfa_enabled": True}
+
+
+@app.post("/api/mfa/disable")
+async def mfa_disable(request: MfaDisableRequest, current_user: str = Depends(get_current_user)):
+    """Disable MFA. Requires password + current TOTP code."""
+    # Verify password
+    verified_user = authenticate_user(current_user, request.password)
+    if not verified_user:
+        raise HTTPException(status_code=401, detail="Invalid password.")
+
+    users = load_users()
+    user_data = users.get(current_user, {})
+
+    if not user_data.get("mfa_enabled"):
+        raise HTTPException(status_code=400, detail="MFA is not enabled.")
+
+    secret = user_data.get("mfa_secret")
+    if not verify_totp(secret, request.totp_code):
+        raise HTTPException(status_code=401, detail="Invalid TOTP code.")
+
+    # Disable MFA
+    user_data["mfa_enabled"] = False
+    user_data["mfa_secret"] = None
+    users[current_user] = user_data
+    save_users(users)
+
+    return {"message": "MFA disabled successfully.", "mfa_enabled": False}
+
+
+@app.post("/api/mfa/login")
+async def mfa_login(request: MfaLoginRequest):
+    """Complete MFA login by verifying TOTP code against MFA-pending token."""
+    username = verify_mfa_pending_token(request.mfa_token)
+
+    users = load_users()
+    user_data = users.get(username, {})
+    secret = user_data.get("mfa_secret")
+
+    if not secret:
+        raise HTTPException(status_code=400, detail="MFA not configured for this user.")
+
+    if not verify_totp(secret, request.totp_code):
+        raise HTTPException(status_code=401, detail="Invalid TOTP code.")
+
+    # MFA verified — issue full tokens
+    role = get_user_role(username)
+    token = create_access_token(username, role=role)
+    refresh = create_refresh_token(username)
+    return TokenResponse(
+        access_token=token,
+        refresh_token=refresh,
+        username=username,
+        role=role,
+        expires_in=8 * 3600,
+    )
+
+
+# --- Admin Endpoints ---
+
+
+@app.post("/api/admin/cleanup")
+async def admin_cleanup(current_user: str = Depends(get_current_user)):
+    """Admin-only: trigger manual cleanup of audit logs and caches."""
+    role = get_user_role(current_user)
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required.")
+
+    from .data_retention import cleanup_audit_logs, cleanup_caches
+    audit_deleted = cleanup_audit_logs()
+    cache_cleared = cleanup_caches()
+    return {
+        "audit_entries_deleted": audit_deleted,
+        "cache_entries_cleared": cache_cleared,
+    }
 
 
 # --- APK Download Page ---
@@ -736,6 +975,9 @@ if _web_enabled:
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         """Catch-all: serve static files from dist/, fallback to index.html for SPA routing."""
+        # Never intercept API routes
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="API endpoint not found")
         file_path = _dist_dir / full_path
         if full_path and file_path.is_file():
             return FileResponse(file_path)

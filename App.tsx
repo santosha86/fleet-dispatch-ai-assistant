@@ -2,7 +2,8 @@ import React, { useState, useEffect, FormEvent } from 'react';
 import ValueAddedTab from './components/ValueAddedTab';
 import LiveDemoTab from './components/LiveDemoTab';
 import ErrorBoundary from './components/ErrorBoundary';
-import { setToken, clearAuth, getToken } from './apiClient';
+import MfaSetup from './components/MfaSetup';
+import { setToken, clearAuth, getToken, setRefreshToken, setUserRole } from './apiClient';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -14,6 +15,10 @@ const App: React.FC = () => {
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaToken, setMfaToken] = useState('');
+  const [mfaCode, setMfaCode] = useState('');
+  const [showMfaSetup, setShowMfaSetup] = useState(false);
 
   useEffect(() => {
     if (loggedIn) {
@@ -37,11 +42,48 @@ const App: React.FC = () => {
       });
       if (res.ok) {
         const data = await res.json();
+        if (data.requires_mfa) {
+          // MFA required — show code input
+          setMfaRequired(true);
+          setMfaToken(data.mfa_token);
+          return;
+        }
         setToken(data.access_token);
+        if (data.refresh_token) setRefreshToken(data.refresh_token);
+        if (data.role) setUserRole(data.role);
         setUsername(data.username);
         setLoggedIn(true);
       } else {
         setLoginError('Invalid username or password');
+      }
+    } catch {
+      setLoginError('Cannot reach server');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleMfaSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setLoginError('');
+    setLoginLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/mfa/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mfa_token: mfaToken, totp_code: mfaCode }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setToken(data.access_token);
+        if (data.refresh_token) setRefreshToken(data.refresh_token);
+        if (data.role) setUserRole(data.role);
+        setUsername(data.username);
+        setMfaRequired(false);
+        setMfaCode('');
+        setLoggedIn(true);
+      } else {
+        setLoginError('Invalid verification code');
       }
     } catch {
       setLoginError('Cannot reach server');
@@ -56,9 +98,60 @@ const App: React.FC = () => {
     setUsername('');
     setLoginUsername('');
     setLoginPassword('');
+    setMfaRequired(false);
+    setMfaCode('');
+    setMfaToken('');
   };
 
   if (!loggedIn) {
+    // MFA code entry screen
+    if (mfaRequired) {
+      return (
+        <div className="min-h-screen bg-[#f5f7fa] flex items-center justify-center">
+          <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-sm">
+            <div className="text-center mb-6">
+              <div className="text-4xl mb-2">🔐</div>
+              <h1 className="text-xl font-bold text-teal-700">Two-Factor Authentication</h1>
+              <p className="text-gray-500 text-sm mt-1">Enter the 6-digit code from your authenticator app</p>
+            </div>
+            <form onSubmit={handleMfaSubmit} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Verification Code</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]{6}"
+                  maxLength={6}
+                  value={mfaCode}
+                  onChange={e => setMfaCode(e.target.value.replace(/\D/g, ''))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-center text-2xl tracking-widest"
+                  autoFocus
+                  required
+                />
+              </div>
+              {loginError && (
+                <p className="text-red-500 text-sm text-center">{loginError}</p>
+              )}
+              <button
+                type="submit"
+                disabled={loginLoading || mfaCode.length !== 6}
+                className="w-full bg-teal-700 text-white py-2 rounded-lg font-semibold hover:bg-teal-800 transition-colors disabled:opacity-50"
+              >
+                {loginLoading ? 'Verifying...' : 'Verify'}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setMfaRequired(false); setMfaCode(''); setLoginError(''); }}
+                className="w-full text-gray-500 text-sm hover:text-gray-700"
+              >
+                Back to login
+              </button>
+            </form>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="min-h-screen bg-[#f5f7fa] flex items-center justify-center">
         <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-sm">
@@ -142,6 +235,13 @@ const App: React.FC = () => {
           {/* Right Section */}
           <div className="flex items-center gap-4 z-10">
             <button
+              onClick={() => setShowMfaSetup(true)}
+              className="text-white/80 hover:text-white text-sm font-medium bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg transition-colors"
+              title="Security Settings"
+            >
+              Security
+            </button>
+            <button
               onClick={handleLogout}
               className="text-white/80 hover:text-white text-sm font-medium bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg transition-colors"
             >
@@ -183,6 +283,7 @@ const App: React.FC = () => {
         </main>
       </div>
     </div>
+    {showMfaSetup && <MfaSetup onClose={() => setShowMfaSetup(false)} />}
     </ErrorBoundary>
   );
 };

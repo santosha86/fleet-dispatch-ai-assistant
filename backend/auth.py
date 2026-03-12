@@ -1,4 +1,7 @@
-"""JWT Authentication module for Fleet Dispatch API."""
+"""JWT Authentication module for Fleet Dispatch API.
+
+Supports access tokens (8h), refresh tokens (7d), and MFA-pending tokens (5min).
+"""
 
 import os
 import json
@@ -18,6 +21,7 @@ SECRET_KEY = os.environ.get(
 )
 ALGORITHM = "HS256"
 TOKEN_EXPIRY_HOURS = 8
+REFRESH_TOKEN_EXPIRY_DAYS = 7
 
 # --- OAuth2 scheme ---
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/login")
@@ -62,10 +66,18 @@ def _generate_users_file():
             "password_hash": _hash_password(password),
             "role": "admin" if username == "pb" else "user",
             "active": True,
+            "mfa_secret": None,
+            "mfa_enabled": False,
         }
     with open(_USERS_FILE, "w") as f:
         json.dump(users, f, indent=2)
     return users
+
+
+def save_users(users: dict):
+    """Save users dict to users.json."""
+    with open(_USERS_FILE, "w") as f:
+        json.dump(users, f, indent=2)
 
 
 def load_users() -> dict:
@@ -76,17 +88,110 @@ def load_users() -> dict:
         return json.load(f)
 
 
-def create_access_token(username: str, expires_delta: timedelta = None) -> str:
-    """Create a JWT access token."""
+def create_access_token(username: str, role: str = "user", expires_delta: timedelta = None) -> str:
+    """Create a JWT access token with role claim."""
     if expires_delta is None:
         expires_delta = timedelta(hours=TOKEN_EXPIRY_HOURS)
     now = time.time()
     payload = {
         "sub": username,
+        "role": role,
+        "type": "access",
         "iat": now,
         "exp": now + expires_delta.total_seconds(),
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def create_refresh_token(username: str) -> str:
+    """Create a JWT refresh token (7-day expiry)."""
+    now = time.time()
+    payload = {
+        "sub": username,
+        "type": "refresh",
+        "iat": now,
+        "exp": now + timedelta(days=REFRESH_TOKEN_EXPIRY_DAYS).total_seconds(),
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def verify_refresh_token(token: str) -> str:
+    """Validate a refresh token and return the username.
+
+    Raises HTTPException on invalid/expired token.
+    """
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") != "refresh":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token type — expected refresh token.",
+            )
+        username = payload.get("sub")
+        if not username:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid refresh token.",
+            )
+        # Verify user still exists and is active
+        users = load_users()
+        user = users.get(username)
+        if not user or not user.get("active", True):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User account is inactive.",
+            )
+        return username
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token has expired. Please login again.",
+        )
+    except jwt.InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token.",
+        )
+
+
+def create_mfa_pending_token(username: str) -> str:
+    """Create a short-lived JWT for MFA verification (5 minutes)."""
+    now = time.time()
+    payload = {
+        "sub": username,
+        "type": "mfa_pending",
+        "iat": now,
+        "exp": now + 300,  # 5 minutes
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def verify_mfa_pending_token(token: str) -> str:
+    """Validate an MFA-pending token and return the username."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") != "mfa_pending":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token type — expected MFA pending token.",
+            )
+        username = payload.get("sub")
+        if not username:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid MFA token.",
+            )
+        return username
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="MFA token has expired. Please login again.",
+        )
+    except jwt.InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid MFA token.",
+        )
 
 
 def authenticate_user(username: str, password: str):
@@ -112,6 +217,10 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> str:
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        # Only accept access tokens (not refresh or mfa_pending)
+        token_type = payload.get("type", "access")
+        if token_type != "access":
+            raise credentials_exception
         username: str = payload.get("sub")
         if username is None:
             raise credentials_exception

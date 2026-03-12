@@ -8,6 +8,7 @@ enum AuthStatus {
   authenticated,
   unauthenticated,
   pinSetupRequired,
+  mfaRequired,
 }
 
 class AuthState {
@@ -19,6 +20,8 @@ class AuthState {
   final String? error;
   final int failedAttempts;
   final String? username;
+  final String? mfaToken; // Temporary token for MFA verification
+  final String? role;
 
   const AuthState({
     this.status = AuthStatus.unknown,
@@ -29,6 +32,8 @@ class AuthState {
     this.error,
     this.failedAttempts = 0,
     this.username,
+    this.mfaToken,
+    this.role,
   });
 
   AuthState copyWith({
@@ -40,6 +45,8 @@ class AuthState {
     String? error,
     int? failedAttempts,
     String? username,
+    String? mfaToken,
+    String? role,
   }) {
     return AuthState(
       status: status ?? this.status,
@@ -50,6 +57,8 @@ class AuthState {
       error: error,
       failedAttempts: failedAttempts ?? this.failedAttempts,
       username: username ?? this.username,
+      mfaToken: mfaToken,
+      role: role ?? this.role,
     );
   }
 
@@ -184,12 +193,27 @@ class AuthNotifier extends StateNotifier<AuthState> {
   /// Login with username and password via backend API
   Future<bool> login(String username, String password) async {
     try {
-      final returnedUsername = await _authService.loginRemote(username, password);
+      final result = await _authService.loginRemote(username, password);
+
+      // Check if MFA is required
+      if (result['requires_mfa'] == true) {
+        state = state.copyWith(
+          status: AuthStatus.mfaRequired,
+          mfaToken: result['mfa_token'] as String?,
+          username: result['username'] as String?,
+          error: null,
+        );
+        return false; // Not fully logged in yet
+      }
+
+      final returnedUsername = result['username'] as String;
+      final role = result['role'] as String?;
       await _authService.setLoggedIn(true);
       await _authService.setUsername(returnedUsername);
       state = state.copyWith(
         isLoggedIn: true,
         username: returnedUsername,
+        role: role,
         error: null,
       );
       // Continue with PIN check flow
@@ -203,6 +227,34 @@ class AuthNotifier extends StateNotifier<AuthState> {
         errorMsg = 'Cannot reach server. Check your connection.';
       }
       state = state.copyWith(error: errorMsg);
+      return false;
+    }
+  }
+
+  /// Complete MFA login with TOTP code
+  Future<bool> verifyMfa(String totpCode) async {
+    final mfaToken = state.mfaToken;
+    if (mfaToken == null) {
+      state = state.copyWith(error: 'MFA session expired. Please login again.');
+      return false;
+    }
+    try {
+      final result = await _authService.loginMfa(mfaToken, totpCode);
+      final returnedUsername = result['username'] as String;
+      final role = result['role'] as String?;
+      await _authService.setLoggedIn(true);
+      await _authService.setUsername(returnedUsername);
+      state = state.copyWith(
+        isLoggedIn: true,
+        username: returnedUsername,
+        role: role,
+        mfaToken: null,
+        error: null,
+      );
+      await _initialize();
+      return true;
+    } catch (e) {
+      state = state.copyWith(error: 'Invalid verification code.');
       return false;
     }
   }

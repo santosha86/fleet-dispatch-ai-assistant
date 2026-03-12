@@ -69,5 +69,11 @@ backend/static/app-release.apk
 # IDE/Tool config
 .claude/
 
+# ChromaDB (runtime-generated vector store, ~24MB)
+backend/pdf_agent/chroma_langchain_db/
+
+# Audit logs (runtime)
+backend/audit.log
+
 # Large data files
 *.xlsx

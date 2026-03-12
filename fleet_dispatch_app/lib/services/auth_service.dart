@@ -14,6 +14,8 @@ class AuthService {
   static const _loggedInKey = 'fleet_logged_in';
   static const _usernameKey = 'fleet_username';
   static const _tokenKey = 'fleet_auth_token';
+  static const _refreshTokenKey = 'fleet_refresh_token';
+  static const _roleKey = 'fleet_user_role';
 
   final FlutterSecureStorage _storage;
   final LocalAuthentication _localAuth;
@@ -130,8 +132,9 @@ class AuthService {
     await _storage.write(key: _loggedInKey, value: loggedIn.toString());
   }
 
-  /// Login via backend API — returns username or throws
-  Future<String> loginRemote(String username, String password) async {
+  /// Login via backend API — returns login result map or throws
+  /// Result may contain 'requires_mfa' flag for MFA flow.
+  Future<Map<String, dynamic>> loginRemote(String username, String password) async {
     final dio = Dio(BaseOptions(
       baseUrl: AppConfig.apiBaseUrl,
       connectTimeout: AppConfig.connectTimeout,
@@ -147,9 +150,52 @@ class AuthService {
       'password': password,
     });
 
-    final token = response.data['access_token'] as String;
+    final data = response.data as Map<String, dynamic>;
+
+    // Check if MFA is required
+    if (data['requires_mfa'] == true) {
+      return data; // Caller handles MFA flow
+    }
+
+    // Full login — store tokens
+    final token = data['access_token'] as String;
     await _storage.write(key: _tokenKey, value: token);
-    return response.data['username'] as String;
+    if (data['refresh_token'] != null) {
+      await _storage.write(key: _refreshTokenKey, value: data['refresh_token'] as String);
+    }
+    if (data['role'] != null) {
+      await _storage.write(key: _roleKey, value: data['role'] as String);
+    }
+    return data;
+  }
+
+  /// Complete MFA login with TOTP code
+  Future<Map<String, dynamic>> loginMfa(String mfaToken, String totpCode) async {
+    final dio = Dio(BaseOptions(
+      baseUrl: AppConfig.apiBaseUrl,
+      connectTimeout: AppConfig.connectTimeout,
+      receiveTimeout: const Duration(seconds: 30),
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+    ));
+
+    final response = await dio.post('/api/mfa/login', data: {
+      'mfa_token': mfaToken,
+      'totp_code': totpCode,
+    });
+
+    final data = response.data as Map<String, dynamic>;
+    final token = data['access_token'] as String;
+    await _storage.write(key: _tokenKey, value: token);
+    if (data['refresh_token'] != null) {
+      await _storage.write(key: _refreshTokenKey, value: data['refresh_token'] as String);
+    }
+    if (data['role'] != null) {
+      await _storage.write(key: _roleKey, value: data['role'] as String);
+    }
+    return data;
   }
 
   /// Get stored JWT token
@@ -157,9 +203,24 @@ class AuthService {
     return await _storage.read(key: _tokenKey);
   }
 
+  /// Get stored refresh token
+  Future<String?> getRefreshToken() async {
+    return await _storage.read(key: _refreshTokenKey);
+  }
+
+  /// Get stored user role
+  Future<String?> getRole() async {
+    return await _storage.read(key: _roleKey);
+  }
+
   /// Clear JWT token
   Future<void> clearToken() async {
     await _storage.delete(key: _tokenKey);
+  }
+
+  /// Clear refresh token
+  Future<void> clearRefreshToken() async {
+    await _storage.delete(key: _refreshTokenKey);
   }
 
   /// Store the logged-in username
@@ -180,5 +241,7 @@ class AuthService {
     await _storage.delete(key: _loggedInKey);
     await _storage.delete(key: _usernameKey);
     await _storage.delete(key: _tokenKey);
+    await _storage.delete(key: _refreshTokenKey);
+    await _storage.delete(key: _roleKey);
   }
 }

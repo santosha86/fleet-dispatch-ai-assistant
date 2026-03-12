@@ -8,6 +8,7 @@ import 'api_exceptions.dart';
 class ApiClient {
   late final Dio _dio;
   final FlutterSecureStorage _storage;
+  bool _isRefreshing = false;
 
   /// Called when a 401 is received — triggers logout in auth provider
   VoidCallback? onUnauthorized;
@@ -25,11 +26,14 @@ class ApiClient {
       },
     ));
 
-    // Auth interceptor — adds Bearer token and handles 401
+    // Auth interceptor — adds Bearer token and handles 401 with refresh
     _dio.interceptors.add(InterceptorsWrapper(
       onRequest: (options, handler) async {
-        // Skip auth header for login endpoint
-        if (!options.path.contains('/api/login')) {
+        // Skip auth header for login/refresh/mfa endpoints
+        final path = options.path;
+        if (!path.contains('/api/login') &&
+            !path.contains('/api/token/refresh') &&
+            !path.contains('/api/mfa/login')) {
           final token = await _storage.read(key: 'fleet_auth_token');
           if (token != null) {
             options.headers['Authorization'] = 'Bearer $token';
@@ -38,8 +42,28 @@ class ApiClient {
         handler.next(options);
       },
       onError: (error, handler) async {
-        if (error.response?.statusCode == 401) {
+        if (error.response?.statusCode == 401 &&
+            !error.requestOptions.path.contains('/api/login') &&
+            !error.requestOptions.path.contains('/api/token/refresh') &&
+            !error.requestOptions.path.contains('/api/mfa/login')) {
+          // Try to refresh the token
+          final refreshed = await _refreshToken();
+          if (refreshed) {
+            // Retry the original request with new token
+            final newToken = await _storage.read(key: 'fleet_auth_token');
+            if (newToken != null) {
+              error.requestOptions.headers['Authorization'] = 'Bearer $newToken';
+            }
+            try {
+              final retryResponse = await _dio.fetch(error.requestOptions);
+              return handler.resolve(retryResponse);
+            } catch (retryError) {
+              // Retry failed — fall through to unauthorized
+            }
+          }
+          // Refresh failed — logout
           await _storage.delete(key: 'fleet_auth_token');
+          await _storage.delete(key: 'fleet_refresh_token');
           onUnauthorized?.call();
         }
         handler.next(error);
@@ -58,6 +82,34 @@ class ApiClient {
         }());
       },
     ));
+  }
+
+  /// Attempt to refresh the access token using the stored refresh token.
+  Future<bool> _refreshToken() async {
+    if (_isRefreshing) return false;
+    _isRefreshing = true;
+    try {
+      final refreshToken = await _storage.read(key: 'fleet_refresh_token');
+      if (refreshToken == null) return false;
+
+      final response = await _dio.post('/api/token/refresh', data: {
+        'refresh_token': refreshToken,
+      });
+
+      if (response.statusCode == 200) {
+        final data = response.data as Map<String, dynamic>;
+        await _storage.write(key: 'fleet_auth_token', value: data['access_token'] as String);
+        if (data['refresh_token'] != null) {
+          await _storage.write(key: 'fleet_refresh_token', value: data['refresh_token'] as String);
+        }
+        return true;
+      }
+      return false;
+    } catch (_) {
+      return false;
+    } finally {
+      _isRefreshing = false;
+    }
   }
 
   /// GET request

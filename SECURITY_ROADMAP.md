@@ -1,129 +1,184 @@
 # Fleet Dispatch — Security Roadmap
-**Version:** v1.1.0 (Security Layer Added)
-**Date:** 2026-03-10
-**Status:** Phase 1 & 2 Complete — Preparing for App Store Launch
+**Version:** v1.2.0
+**Date:** 2026-03-11
+**Status:** Phase 1, 2, and 4 (5 of 10 items) Complete
 
 ---
 
-## Priority Classification
-
-### PRIORITY 1 — Mandatory for App Store Launch (Google Play + Apple App Store)
-> Without these, the app WILL BE REJECTED by the stores or violate their policies.
-
-| # | Security Item | Why Mandatory | Status |
-|---|--------------|---------------|--------|
-| 1.1 | **HTTPS (SSL/TLS)** | Both Google Play and Apple **require** all network traffic over HTTPS. Apple enforces App Transport Security (ATS) — HTTP calls are blocked by default on iOS. Google Play flags apps using cleartext HTTP. | PENDING (Deployment team) |
-| 1.2 | **Privacy Policy URL** | Both stores **require** a public privacy policy URL during submission. Must describe what data is collected, how it's used, and how it's stored. | PENDING (Legal team) |
-| 1.3 | **Data Safety Declaration (Google Play)** | Google Play requires a Data Safety form declaring what data the app collects/shares. | PENDING (During submission) |
-| 1.4 | **App Privacy Details (Apple)** | Apple requires privacy nutrition labels — what data types are collected and linked to user identity. | PENDING (During submission) |
-| 1.5 | **JWT Authentication** | Store reviewers test if the app handles auth properly. Login must return a real token, and API calls must be authenticated. Hardcoded passwords in source code is a rejection risk. | DONE |
-| 1.6 | **Input Validation** | Both stores check for basic security — SQL injection, XSS, and oversized inputs must be handled. | DONE |
-
-### PRIORITY 2 — Recommended for Launch (Professional Quality)
-> Not strictly required by stores, but expected for a professional app shown to customers.
-
-| # | Security Item | Why Recommended | Status |
-|---|--------------|-----------------|--------|
-| 2.1 | **Password Hashing (PBKDF2-SHA256)** | Plaintext passwords in code is a security red flag. Any security audit will flag this immediately. | DONE |
-| 2.2 | **CORS Tightening** | Currently allows ALL origins (`*`). Should restrict to known domains to prevent cross-site attacks. | DONE |
-| 2.3 | **Rate Limiting** | Prevents API abuse and protects the LLM from overload. Basic protection expected in any production API. | DONE |
-| 2.4 | **Audit Logging** | Records who accessed what and when. Required for any customer-facing POC to demonstrate accountability. | DONE |
-| 2.5 | **401 Handling (Auto-logout)** | When token expires, app should gracefully redirect to login instead of showing errors. | DONE |
-
-### PRIORITY 3 — Corporate Security (Post-Launch)
-> These are enterprise-grade features. Implement after successful store launch when scaling to production.
-
-| # | Security Item | Description | Status |
-|---|--------------|-------------|--------|
-| 3.1 | **SSO / Active Directory Integration** | Replace username/password with company single sign-on (SAML, OAuth2, Azure AD). Allows IT to manage user access centrally. | FUTURE |
-| 3.2 | **Role-Based Access Control (RBAC)** | Different permissions per role. Example: `admin` = full access, `operations` = dispatch/waybills/routes only, `finance` = finance queries only, `viewer` = read-only. Foundation already exists — `users.json` has a `role` field. Need to: (a) define roles & allowed query categories, (b) map router categories to roles, (c) check permissions before processing query. | FUTURE |
-| 3.3 | **Token Refresh (Refresh Tokens)** | Instead of 8-hour tokens expiring and requiring re-login, use refresh tokens for seamless experience. | FUTURE |
-| 3.4 | **Database Encryption** | Encrypt the SQLite database at rest. Currently unencrypted on server. | FUTURE |
-| 3.5 | **End-to-End Encryption** | Encrypt chat messages between app and server (beyond HTTPS). Required for highly sensitive data. | FUTURE |
-| 3.6 | **API Gateway / WAF** | Web Application Firewall (AWS WAF, Cloudflare) for DDoS protection, bot detection, IP blocking. | FUTURE |
-| 3.7 | **Penetration Testing** | Professional security audit by a third-party firm before enterprise rollout. | FUTURE |
-| 3.8 | **OWASP Compliance Audit** | Full OWASP Top 10 security review of backend and mobile app. | FUTURE |
-| 3.9 | **Data Retention Policy** | Auto-delete chat history, audit logs after N days. Comply with company data governance. | FUTURE |
-| 3.10 | **Multi-Factor Authentication (MFA)** | Add OTP/authenticator app as second factor. PIN/biometric in app is local only — not true MFA. | FUTURE |
-
----
-
-## What We Build NOW (Priority 1 + 2)
-
-### Backend Changes
-
-| File | Change |
-|------|--------|
-| **NEW** `backend/auth.py` | JWT token creation, bcrypt password verification, FastAPI auth dependency |
-| **NEW** `backend/users.json` | Bcrypt-hashed user credentials (auto-generated from current users) |
-| **NEW** `backend/input_validator.py` | Query length limit (500 chars) + SQL injection pattern detection |
-| **NEW** `backend/rate_limiter.py` | In-memory per-user rate limiting (60 req/min) |
-| **NEW** `backend/audit_log.py` | Request logging: timestamp, user, endpoint, status, duration |
-| **MODIFY** `backend/requirements.txt` | Add PyJWT, passlib[bcrypt] |
-| **MODIFY** `backend/main.py` | JWT login, auth guards on all endpoints, CORS tightening, middleware |
-
-### Web Frontend Changes
-
-| File | Change |
-|------|--------|
-| **NEW** `apiClient.ts` | Authenticated fetch wrapper (adds Bearer token to all API calls) |
-| **MODIFY** `App.tsx` | Store JWT on login, clear on logout |
-| **MODIFY** `components/ChatWidget.tsx` | Use authenticated fetch (7 API calls) |
-| **MODIFY** `components/UsageStats.tsx` | Use authenticated fetch (1 API call) |
-| **MODIFY** `components/InfoPanel.tsx` | Use authenticated fetch (1 API call) |
-
-### Flutter Mobile App Changes
-
-| File | Change |
-|------|--------|
-| **MODIFY** `lib/services/auth_service.dart` | Remote login via backend API, JWT token storage |
-| **MODIFY** `lib/core/network/api_client.dart` | Auth interceptor (adds Bearer token), 401 auto-logout |
-| **MODIFY** `lib/providers/auth_provider.dart` | Use remote login instead of local validation |
-
-### Infrastructure (Deployment Team)
-
-| Item | Action Required |
-|------|----------------|
-| **SSL Certificate** | Obtain SSL cert (Let's Encrypt or company CA) and configure on server |
-| **Reverse Proxy** | Set up Nginx/Caddy in front of uvicorn for HTTPS termination |
-| **Environment Variables** | Set `JWT_SECRET` (random 32+ char string) and `CORS_ORIGINS` on server |
-| **Privacy Policy** | Legal team drafts and hosts at a public URL |
-
----
-
-## Implementation Order
+## Progress Overview
 
 ```
-Phase 1: Backend Security (we build now)
-  ├── auth.py + users.json (JWT + bcrypt)
-  ├── input_validator.py
-  ├── rate_limiter.py
-  ├── audit_log.py
-  └── main.py updates (wire everything together)
+Phase 1: Backend Security ........................ DONE (v1.0.0)
+Phase 2: Frontend + Mobile Auth .................. DONE (v1.1.0)
+Phase 3: Infrastructure (deployment team) ........ PENDING
+Phase 4: Corporate Security ...................... 5/10 DONE (v1.2.0)
+```
 
-Phase 2: Frontend + Mobile Auth (we build now)
-  ├── apiClient.ts (web)
-  ├── App.tsx, ChatWidget.tsx, etc. (web)
-  └── auth_service.dart, api_client.dart (Flutter)
+---
+
+## PHASE 1 — Mandatory for App Store Launch
+
+> Without these, the app WILL BE REJECTED by the stores or violate their policies.
+
+| # | Security Item | Status | Notes |
+|---|--------------|--------|-------|
+| 1.1 | **HTTPS (SSL/TLS)** | PENDING | Deployment team — SSL cert + Nginx reverse proxy |
+| 1.2 | **Privacy Policy URL** | PENDING | Legal team — public URL required for store submission |
+| 1.3 | **Data Safety Declaration (Google Play)** | PENDING | Fill during Google Play submission |
+| 1.4 | **App Privacy Details (Apple)** | PENDING | Fill during Apple App Store submission |
+| 1.5 | **JWT Authentication** | DONE (v1.0.0) | `backend/auth.py` — PBKDF2-SHA256 hashed passwords, JWT tokens |
+| 1.6 | **Input Validation** | DONE (v1.0.0) | `backend/input_validator.py` — SQL injection + XSS + length limits |
+
+---
+
+## PHASE 2 — Recommended for Launch (Professional Quality)
+
+> Not strictly required by stores, but expected for a professional/customer-facing app.
+
+| # | Security Item | Status | Notes |
+|---|--------------|--------|-------|
+| 2.1 | **Password Hashing (PBKDF2-SHA256)** | DONE (v1.0.0) | `backend/auth.py` — salted PBKDF2-SHA256, 100K iterations |
+| 2.2 | **CORS Tightening** | DONE (v1.0.0) | `backend/main.py` — restricted to known origins |
+| 2.3 | **Rate Limiting** | DONE (v1.0.0) | `backend/rate_limiter.py` — 60 req/min per user |
+| 2.4 | **Audit Logging** | DONE (v1.0.0) | `backend/audit_log.py` — user, endpoint, status, duration |
+| 2.5 | **401 Handling (Auto-logout)** | DONE (v1.1.0) | Web: `apiClient.ts`, Flutter: `api_client.dart` |
+
+---
+
+## PHASE 3 — Infrastructure (Deployment Team)
+
+> Required before app store submission. Not code changes — IT/deployment/legal team tasks.
+
+| # | Item | Owner | Status |
+|---|------|-------|--------|
+| 3.1 | **SSL Certificate** | Deployment team | PENDING — Let's Encrypt or company CA |
+| 3.2 | **Reverse Proxy (Nginx/Caddy)** | Deployment team | PENDING — HTTPS termination in front of uvicorn |
+| 3.3 | **Environment Variables** | Deployment team | PENDING — Set `JWT_SECRET`, `CORS_ORIGINS`, `DATA_ENCRYPTION_KEY` on server |
+| 3.4 | **Privacy Policy URL** | Legal team | PENDING — Draft and host at a public URL |
+| 3.5 | **Store Submission** | Dev + Legal | PENDING — After 3.1–3.4 are done |
+
+---
+
+## PHASE 4 — Corporate Security (Post-Launch)
+
+> Enterprise-grade features. 5 of 10 items completed in v1.2.0.
+
+### DONE
+
+| # | Security Item | What Was Built | Files |
+|---|--------------|----------------|-------|
+| 4.1 | **Role-Based Access Control (RBAC)** | 5 roles (`admin`, `operations`, `finance`, `viewer`, `user`) mapped to allowed query categories. Permission checked before every query. Role included in JWT and login response. | `backend/rbac.py` (new), `backend/auth.py`, `backend/main.py` |
+| 4.2 | **Token Refresh** | 7-day refresh tokens issued on login. Auto-refresh on 401 in web (`apiClient.ts`) and Flutter (`api_client.dart`). New endpoint `POST /api/token/refresh`. | `backend/auth.py`, `backend/main.py`, `apiClient.ts`, `api_client.dart` |
+| 4.3 | **Data Retention Policy** | Background scheduler: audit logs auto-deleted after 30 days, caches cleaned every 1 hour. Admin can trigger manual cleanup via `POST /api/admin/cleanup`. | `backend/data_retention.py` (new), `backend/main.py` |
+| 4.4 | **Multi-Factor Authentication (MFA)** | TOTP via authenticator apps (Google Authenticator, Microsoft Authenticator, etc.). Setup with QR code, 6-digit code verification. Login flow: password → MFA challenge → full JWT. Endpoints: `/api/mfa/setup`, `/api/mfa/verify`, `/api/mfa/disable`, `/api/mfa/login`. | `backend/mfa.py` (new), `backend/auth.py`, `backend/main.py`, `App.tsx`, `auth_service.dart`, `auth_provider.dart` |
+| 4.5 | **Column-Level Encryption** | Sensitive columns (Contractor Name, Vendor Name, quantities, driver_id) encrypted with XOR+base64 before caching. Protects data at rest in server-side caches. | `backend/encryption.py` (new), `backend/main.py` |
+
+### REMAINING (FUTURE)
+
+| # | Security Item | Description | Effort | Priority |
+|---|--------------|-------------|--------|----------|
+| 4.6 | **SSO / Active Directory** | Replace username/password with SAML/OAuth2/Azure AD single sign-on. Allows IT to manage user access centrally. | High | When moving to enterprise |
+| 4.7 | **End-to-End Encryption** | Encrypt chat messages between app and server beyond HTTPS. Required for highly sensitive data. | Medium | When handling classified data |
+| 4.8 | **API Gateway / WAF** | Web Application Firewall (AWS WAF, Cloudflare) for DDoS protection, bot detection, IP blocking. | Medium | When deploying to cloud |
+| 4.9 | **Penetration Testing** | Hire professional security firm to test: login bypass, data access, server crashes, injection attacks. Delivers report with findings. | External | Before enterprise rollout |
+| 4.10 | **OWASP Compliance Audit** | Full OWASP Top 10 security review of backend and mobile app. | External | Before enterprise rollout |
+
+---
+
+## New Endpoints (v1.2.0)
+
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/api/token/refresh` | POST | No (refresh token is the credential) | Exchange refresh token for new access token |
+| `/api/mfa/setup` | POST | Bearer token | Generate TOTP secret + QR code for authenticator app |
+| `/api/mfa/verify` | POST | Bearer token | Verify TOTP code during setup (enables MFA) |
+| `/api/mfa/disable` | POST | Bearer token | Disable MFA (requires password + TOTP code) |
+| `/api/mfa/login` | POST | No (MFA pending token) | Complete MFA login with 6-digit TOTP code |
+| `/api/admin/cleanup` | POST | Bearer token (admin only) | Trigger manual cleanup of audit logs + caches |
+
+---
+
+## Files Added/Modified in v1.2.0
+
+### New Files (3)
+
+| File | Purpose |
+|------|---------|
+| `backend/rbac.py` | Role → permission mappings, `check_permission()` |
+| `backend/data_retention.py` | Scheduled cleanup of audit logs (30d) and caches (1h) |
+| `backend/mfa.py` | TOTP: secret generation, QR codes, code verification (pyotp + qrcode) |
+| `backend/encryption.py` | Column-level XOR encryption for sensitive data in caches |
+
+### Modified Files (8)
+
+| File | Changes |
+|------|---------|
+| `backend/auth.py` | Refresh tokens (7d), MFA-pending tokens (5min), role in JWT, `save_users()` |
+| `backend/main.py` | RBAC checks, 6 new endpoints, encryption on results, retention scheduler |
+| `backend/users.json` | Added `mfa_secret`, `mfa_enabled` fields |
+| `backend/requirements.txt` | Added `pyotp==2.9.0`, `qrcode[pil]==8.0` |
+| `apiClient.ts` | Refresh token storage, auto-refresh on 401, role storage |
+| `App.tsx` | MFA 6-digit code entry screen, stores refresh token + role |
+| `auth_service.dart` | `loginMfa()`, refresh/role storage, updated `loginRemote()` |
+| `api_client.dart` | `_refreshToken()`, auto-refresh on 401 with request retry |
+| `auth_provider.dart` | `mfaRequired` status, `verifyMfa()`, role in state |
+
+---
+
+## Environment Variables
+
+| Variable | Purpose | Required |
+|----------|---------|----------|
+| `JWT_SECRET` | Secret key for signing JWT tokens | Production |
+| `CORS_ORIGINS` | Comma-separated allowed origins | Production |
+| `DATA_ENCRYPTION_KEY` | Key for column-level encryption | Production |
+
+---
+
+## Implementation History
+
+```
+v1.0.0 (2026-03-03) — Phase 1: Backend Security
+  DONE  auth.py + users.json (JWT + PBKDF2-SHA256)
+  DONE  input_validator.py (SQL injection, XSS, length)
+  DONE  rate_limiter.py (60 req/min per user)
+  DONE  audit_log.py (request logging)
+  DONE  main.py (auth guards, CORS tightening)
+
+v1.1.0 (2026-03-10) — Phase 2: Frontend + Mobile Auth
+  DONE  apiClient.ts (web auth wrapper)
+  DONE  App.tsx, ChatWidget.tsx (web login/logout)
+  DONE  auth_service.dart, api_client.dart (Flutter JWT + 401)
+
+v1.2.0 (2026-03-11) — Phase 4: Corporate Security (5 features)
+  DONE  RBAC (rbac.py — 5 roles, per-route permission checks)
+  DONE  Token Refresh (7-day refresh tokens, auto-refresh on 401)
+  DONE  Data Retention (30-day audit log cleanup, hourly cache cleanup)
+  DONE  MFA/TOTP (pyotp, QR setup, 6-digit login flow)
+  DONE  Column-Level Encryption (sensitive columns encrypted in caches)
+
+--- PENDING ---
 
 Phase 3: Infrastructure (deployment team)
-  ├── SSL certificate + HTTPS
-  ├── Privacy policy URL
-  └── Store submission
+  TODO  SSL certificate + HTTPS
+  TODO  Privacy policy URL
+  TODO  Store submission forms
 
-Phase 4: Corporate Security (future)
-  ├── SSO / Active Directory
-  ├── RBAC, MFA, encryption
-  └── Penetration testing
+Phase 4: Remaining Corporate Security
+  TODO  SSO / Active Directory integration
+  TODO  End-to-End Encryption
+  TODO  API Gateway / WAF
+  TODO  Penetration Testing
+  TODO  OWASP Compliance Audit
 ```
 
 ---
 
 ## Notes for Manager
 
-- **Phases 1 & 2** are code changes — we handle this
-- **Phase 3** requires IT/deployment team and legal team
-- **Phase 4** is post-launch, planned for when the app moves from POC to production
-- The app already has **PIN lock + biometric auth** on mobile (local security)
-- The app already has **encrypted local storage** (flutter_secure_storage uses AES)
-- After Phases 1-3, the app meets **Google Play and Apple App Store security requirements**
+- **Phases 1, 2, and 4 (partial)** are code changes — completed by dev team
+- **Phase 3** requires IT/deployment team and legal team — **blocking for store submission**
+- **Phase 4 remaining** (SSO, E2E encryption, WAF, pen testing) is post-launch, planned for enterprise rollout
+- The app has **6 layers of security**: JWT auth, input validation, rate limiting, audit logging, RBAC, and MFA
+- Mobile app has additional **PIN lock + biometric auth** (local) and **encrypted storage** (AES via flutter_secure_storage)
+- After Phase 3 completion, the app meets **Google Play and Apple App Store security requirements**

@@ -9,6 +9,7 @@ import 'providers/settings_provider.dart';
 import 'screens/auth_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
+import 'screens/mfa_screen.dart';
 
 class FleetDispatchApp extends ConsumerStatefulWidget {
   const FleetDispatchApp({super.key});
@@ -90,6 +91,8 @@ class _FleetDispatchAppState extends ConsumerState<FleetDispatchApp>
         return const LoginScreen();
       case AuthStatus.unauthenticated:
         return const AuthScreen();
+      case AuthStatus.mfaRequired:
+        return const MfaScreen();
       case AuthStatus.pinSetupRequired:
       case AuthStatus.authenticated:
         return const HomeScreen();

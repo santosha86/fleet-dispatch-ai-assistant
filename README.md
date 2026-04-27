@@ -21,29 +21,98 @@ Most "chat-with-your-data" demos stop at a single LLM call. This one is a **ship
 
 ## Architecture
 
-```
-                        ┌──────────────────────────┐
-   Web (React/Vite)     │                          │      ┌──────────────┐
-   ─────────────────────┤   FastAPI + Uvicorn      │──────┤ Ollama (LLM) │
-   Mobile (Flutter)     │                          │      │  gpt-oss     │
-   ─────────────────────┤   JWT · RBAC · MFA       │      └──────────────┘
-                        │   Rate Limit · Audit Log │
-                        └────────────┬─────────────┘
-                                     │
-                        ┌────────────┴─────────────┐
-                        │     LangGraph Router      │
-                        │                           │
-              ┌─────────┼──────┬──────────┬────────┤
-              │         │      │          │        │
-        ┌─────▼───┐ ┌───▼──┐ ┌─▼─────┐ ┌─▼────┐ ┌─▼─────────┐
-        │ SQL     │ │ CSV  │ │ PDF   │ │ Math │ │ Greeting/  │
-        │ Agent   │ │Agent │ │Agent  │ │Agent │ │ Out-of-    │
-        │(SQLite) │ │      │ │(RAG + │ │      │ │ Scope      │
-        │         │ │      │ │Chroma)│ │      │ │            │
-        └─────────┘ └──────┘ └───────┘ └──────┘ └────────────┘
+```mermaid
+flowchart LR
+    subgraph Clients
+        W["Web<br/>React + Vite"]
+        M["Mobile<br/>Flutter"]
+    end
+
+    W -->|HTTPS · JWT| API
+    M -->|HTTPS · JWT| API
+
+    subgraph Backend["FastAPI · Uvicorn"]
+        API[/"REST + SSE endpoints"/]
+        SEC{{"Auth · RBAC · MFA<br/>Rate limit · Audit log"}}
+        R["LangGraph Router"]
+        SQL["SQL Agent"]
+        CSV["CSV Agent"]
+        PDF["PDF / RAG Agent"]
+        MATH["Math Agent"]
+        GR["Greeting /<br/>Out-of-scope"]
+    end
+
+    API --> SEC --> R
+    R --> SQL
+    R --> CSV
+    R --> PDF
+    R --> MATH
+    R --> GR
+
+    SQL --> DB[("SQLite<br/>waybills")]
+    CSV --> CSVF[("CSV<br/>dwell-time")]
+    PDF --> CHR[("Chroma<br/>vector store")]
+
+    SQL -. fast path .-> FQ["40+ fixed SQL templates"]
+    CSV -. fast path .-> FCQ["20+ fixed CSV patterns"]
+
+    SQL --> O
+    CSV --> O
+    PDF --> O
+    MATH --> O
+    R -. fallback classify .-> O
+
+    subgraph LLM["Local LLM"]
+        O[("Ollama<br/>gpt-oss")]
+    end
 ```
 
 A single user query enters the router, gets classified by keyword (fast path) or LLM (fallback), and is dispatched to the right agent. Each agent has its own caching layer and fallback templates. Results stream back via Server-Sent Events.
+
+### Request flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as User
+    participant C as Client (Web / Flutter)
+    participant API as FastAPI
+    participant Auth as JWT · RBAC · MFA
+    participant R as Router
+    participant A as Agent
+    participant Cache
+    participant LLM as Ollama
+    participant Store as Data store
+
+    U->>C: types query
+    C->>API: POST /api/query (Bearer JWT)
+    API->>Auth: verify token · role · rate limit
+    Auth-->>API: ok
+    API->>R: classify(query)
+
+    alt keyword fast-path
+        R-->>A: matched fixed pattern
+    else fallback
+        R->>LLM: classify
+        LLM-->>R: category
+        R->>A: dispatch
+    end
+
+    A->>Cache: lookup
+    alt cache hit
+        Cache-->>A: result
+    else cache miss
+        A->>LLM: build SQL / extract / RAG
+        LLM-->>A: response
+        A->>Store: execute query
+        Store-->>A: rows
+        A->>Cache: store
+    end
+
+    A-->>API: result + summary
+    API-->>C: SSE stream / JSON
+    C-->>U: render table + summary
+```
 
 ---
 
@@ -267,7 +336,7 @@ The full git history (5 commits, 3 tagged releases) is preserved.
 
 ## License
 
-This project is shared for portfolio / demonstration purposes. Please contact me before reusing the code.
+[MIT](LICENSE) — free to learn from, fork, or build on with attribution.
 
 ---
 

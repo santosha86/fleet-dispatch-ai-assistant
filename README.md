@@ -1,21 +1,36 @@
 # Fleet Dispatch AI Assistant
 
-> A production-grade, multi-agent AI assistant that lets dispatch operators query operational data — waybills, vendors, contractors, vehicle dwell times, and policy documents — in natural language across **English and Arabic**, with full enterprise security baked in.
+> **Bilingual (English/Arabic, RTL-aware) production AI assistant that lets dispatch operators query operational data in natural language.**
+
+Operators need answers to questions like *"which vendor has the most overdue waybills this week?"* or *"what does the regulatory grid code say about dispatch under load shedding?"* — across structured databases, CSV exports, and regulatory PDFs, in either Arabic or English, on web or mobile.
 
 This repository is a **portfolio / showcase version** of a real production system I built. Customer-specific data, branding, internal hostnames, and credentials have been removed. All commits, architecture, and security implementations are preserved as-built.
 
----
+## What it does
 
-## Why this project
+Routes a natural-language question to one of four specialised agents — SQL, CSV, PDF/RAG, or math — and returns an answer with sub-second latency on common queries.
 
-Most "chat-with-your-data" demos stop at a single LLM call. This one is a **shipped product** that had to satisfy real-world constraints:
+## Stack
 
-- **Privacy** — no cloud LLM. All inference runs on a local Ollama model (`gpt-oss`) inside the customer's network.
-- **Speed** — sub-second responses on common queries via a keyword router that bypasses the LLM entirely (40+ fuzzy-matched SQL templates and 20+ CSV patterns).
-- **Robustness** — multi-agent LangGraph workflow with timeout protection on every LLM call so a slow model never hangs the UI.
-- **Bilingual** — full English + Arabic UI with RTL layout; Arabic greetings detected and answered without round-tripping the LLM.
-- **Enterprise security** — JWT + refresh tokens, RBAC across 5 roles, TOTP MFA, rate limiting, input validation, audit logging, column-level encryption at rest, and a data-retention background job.
-- **Cross-platform** — same backend serves a React web app and a Flutter Android/iOS app.
+- **Backend:** Python + FastAPI, LangGraph multi-agent orchestration, local Ollama LLM
+- **Router:** Hybrid keyword-plus-LLM router — short-circuits common queries to skip the LLM call entirely
+- **Frontend (web):** React + SSE streaming
+- **Frontend (mobile):** Flutter for Android + iOS, RTL-aware Arabic layout
+- **Data:** SQLite + CSV + PDF document store
+
+## Security stack (designed and built solo)
+
+- JWT with refresh tokens
+- RBAC across 5 roles
+- TOTP-based MFA
+- Per-user rate limiting + input validation
+- Audit logging
+- Server-side column encryption
+- Scheduled data-retention job
+
+## Why hybrid routing matters
+
+Most multi-agent systems route every query through an LLM classifier. That's slow and expensive. The hybrid keyword-plus-LLM router catches the top 60% of common queries with regex-style intent detection, and falls back to the LLM only for ambiguous cases — sub-second responses, lower cost, deterministic behavior on the easy path.
 
 ---
 
@@ -116,10 +131,10 @@ sequenceDiagram
 
 ---
 
-## Tech stack
+## Detailed dependencies
 
-| Layer | Technologies |
-|-------|--------------|
+| Layer | Versions / libraries |
+|-------|----------------------|
 | **Backend** | Python 3.11, FastAPI, Uvicorn, LangChain, LangGraph, SQLite |
 | **LLM** | Ollama (`gpt-oss`) — local inference, no external API calls |
 | **Vector store** | ChromaDB (RAG over policy / reference PDFs) |
